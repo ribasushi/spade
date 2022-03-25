@@ -1,0 +1,10 @@
+{
+  "response_code": <!--# echo var="status" default="000" -->,
+  "error_lines": [
+    " Your request resulted in the non-2xx status: <!--# echo var="status" default="000" -->                                            ",
+    "                                                                                             ",
+    " If this condition persists for more than 5 minutes, please reach out to the program         ",
+    " administrators in #slingshot-evergreen over at the Filecoin Slack https://filecoin.io/slack ",
+    " ( direct link: https://filecoinproject.slack.com/archives/C0377FJCG1L )                     "
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "response_code": <!--# echo var="status" default="000" -->,
+  "error_lines": [
+    " Your request resulted in the non-2xx status: <!--# echo var="status" default="000" -->            ",
+    "                                                             ",
+    " If you are unsure where to start - visit the project README ",
+    " https://github.com/filecoin-project/evergreen-dealer#readme "
+  ]
+}
