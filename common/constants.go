@@ -6,7 +6,8 @@ import (
 )
 
 const (
-	AppName = "evergreen-dealer"
+	AppName      = "evergreen-dealer"
+	PromInstance = "dataprogs_evergreen"
 
 	FilGenesisUnix      = 1598306400
 	FilDefaultLookback  = 10

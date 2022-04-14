@@ -37,7 +37,7 @@ func main() {
 		emitEndLogs := func(logSuccess bool) {
 
 			took := time.Since(t0).Truncate(time.Millisecond)
-			cmdPrefix := common.NonAlphanumRun.ReplaceAllString(common.AppName+"_cron_"+currentCmd, `_`)
+			cmdFqName := common.NonAlphanumRun.ReplaceAllString(common.AppName+"_cron_"+currentCmd, `_`)
 			logHdr := fmt.Sprintf("=== FINISH '%s' run", currentCmd)
 			logArgs := []interface{}{
 				"success", logSuccess,
@@ -45,12 +45,12 @@ func main() {
 			}
 
 			tookGauge := prometheus.NewGauge(prometheus.GaugeOpts{
-				Name: fmt.Sprintf("%s_run_time", cmdPrefix),
+				Name: fmt.Sprintf("%s_run_time", cmdFqName),
 				Help: "How long did the job take (in milliseconds)",
 			})
 			tookGauge.Set(float64(took.Milliseconds()))
 			successGauge := prometheus.NewGauge(prometheus.GaugeOpts{
-				Name: fmt.Sprintf("%s_success", cmdPrefix),
+				Name: fmt.Sprintf("%s_success", cmdFqName),
 				Help: "Whether the job completed with success(1) or failure(0)",
 			})
 
@@ -63,7 +63,8 @@ func main() {
 			}
 
 			if common.PromURL != "" {
-				if promErr := prometheuspush.New(common.PromURL, cmdPrefix).
+				if promErr := prometheuspush.New(common.PromURL, common.NonAlphanumRun.ReplaceAllString(currentCmd, "_")).
+					Grouping("instance", common.NonAlphanumRun.ReplaceAllString(common.PromInstance, "_")).
 					BasicAuth(common.PromUser, common.PromPass).
 					Collector(tookGauge).
 					Collector(successGauge).
