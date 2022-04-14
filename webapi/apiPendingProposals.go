@@ -21,6 +21,48 @@ func apiListPendingProposals(c echo.Context) error {
 
 	ctx := c.Request().Context()
 
+	r := types.ResponsePendingProposals{
+		PendingProposals: make([]types.DealProposal, 0, 128),
+	}
+
+	var isActive bool
+	var customMaxOutstandingGiB *int64
+	err = common.Db.QueryRow(
+		ctx,
+		`
+		SELECT
+			(
+				SELECT is_active FROM providers WHERE provider_id = $1
+			),
+			COALESCE(
+				(
+					SELECT SUM ( p.padded_size )
+						FROM pieces p
+						JOIN proposals pr USING ( piece_cid )
+					WHERE
+						pr.proposal_failstamp = 0
+							AND
+						pr.activated_deal_id IS NULL
+							AND
+						pr.provider_id = $1
+				),
+				0
+			) AS cur_outstanding_bytes,
+
+			( SELECT (meta->>'max_outstanding_GiB')::INTEGER FROM providers WHERE provider_id = $1 ) AS max_outstanding_gib
+		`,
+		sp.String(),
+	).Scan(&isActive, &r.CurOutstandingBytes, &customMaxOutstandingGiB)
+	if err != nil {
+		return err
+	}
+
+	maxBytes := common.MaxOutstandingGiB
+	if customMaxOutstandingGiB != nil && *customMaxOutstandingGiB > common.MaxOutstandingGiB {
+		maxBytes = *customMaxOutstandingGiB
+	}
+	maxBytes <<= 30
+
 	rows, err := common.Db.Query(
 		ctx,
 		`
@@ -51,9 +93,6 @@ func apiListPendingProposals(c echo.Context) error {
 	defer rows.Close()
 
 	var totalSize, countPendingProposals int64
-	r := types.ResponsePendingProposals{
-		PendingProposals: make([]types.DealProposal, 0, 128),
-	}
 	fails := make(map[int64]types.ProposalFailure, 128)
 	for rows.Next() {
 		var prop types.DealProposal
@@ -111,8 +150,21 @@ func apiListPendingProposals(c echo.Context) error {
 
 	msg := strings.Join([]string{
 		"This is an overview of deals recently proposed to SP " + sp.String(),
-		fmt.Sprintf("There currently are %d proposals to send out, and %d successful proposals awaiting sealing.", countPendingProposals, len(r.PendingProposals)),
+		fmt.Sprintf(
+			"There currently are %d proposals to send out, and %d successful proposals totalling %0.2f GiB awaiting sealing.",
+			countPendingProposals,
+			len(r.PendingProposals),
+			float64(r.CurOutstandingBytes)/(1<<30),
+		),
 	}, "\n")
+
+	if isActive {
+		msg += fmt.Sprintf(
+			"\nYou can request an additional %0.2f GiB of proposals before exhausting your in-flight quota.",
+			float64(maxBytes-r.CurOutstandingBytes)/(1<<30),
+		)
+		r.MaxOutstandingBytes = &maxBytes
+	}
 
 	if len(fails) > 0 {
 		msg += fmt.Sprintf("\n\nIn the past 24h there were %d proposal errors, shown below.", len(fails))

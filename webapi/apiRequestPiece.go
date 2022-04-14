@@ -244,15 +244,17 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		return err
 	}
 
-	maxBytes := common.MaxOutstandingGiB << 30
+	maxBytes := common.MaxOutstandingGiB
 	if customMaxOutstandingGiB != nil && *customMaxOutstandingGiB > common.MaxOutstandingGiB {
-		maxBytes = *customMaxOutstandingGiB << 30
+		maxBytes = *customMaxOutstandingGiB
 	}
+	maxBytes <<= 30
+
 	if curOutstandingBytes == nil {
 		curOutstandingBytes = new(int64)
 	}
 
-	r := types.ResponseDealRequest{CurOutstandingBytes: curOutstandingBytes, MaxOutstandingBytes: &maxBytes}
+	r := types.ResponseDealRequest{CurOutstandingBytes: *curOutstandingBytes}
 
 	if *curOutstandingBytes >= maxBytes {
 		return retPayloadAnnotated(
@@ -264,6 +266,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		)
 	}
 
+	r.MaxOutstandingBytes = &maxBytes
 	r.TentativeCounts = cn
 	if cn.Self >= cn.MaxSp ||
 		cn.InOrg >= cn.MaxOrg ||
@@ -358,7 +361,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 	tx = nil
 
 	// we managed - bump the counts and return stats
-	*r.CurOutstandingBytes += *paddedPieceSize
+	r.CurOutstandingBytes += *paddedPieceSize
 	r.TentativeCounts.Self++
 	r.TentativeCounts.Total++
 	r.TentativeCounts.InOrg++

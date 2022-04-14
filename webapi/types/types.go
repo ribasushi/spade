@@ -20,15 +20,17 @@ type ResponsePayload interface {
 
 // ResponsePendingProposals is the response payload returned by the .../pending_proposals endpoint
 type ResponsePendingProposals struct {
-	RecentFailures   []ProposalFailure `json:"recent_failures,omitempty"`
-	PendingProposals []DealProposal    `json:"pending_proposals"`
+	RecentFailures      []ProposalFailure `json:"recent_failures,omitempty"`
+	CurOutstandingBytes int64             `json:"bytes_pending_current"`
+	MaxOutstandingBytes *int64            `json:"bytes_pending_max"`
+	PendingProposals    []DealProposal    `json:"pending_proposals"`
 }
 
 // ResponseDealRequest is the response payload returned by the .../request_piece/{{PieceCid}} endpoint
 type ResponseDealRequest struct {
 	TentativeCounts     ReplicaCounts `json:"tentative_replica_counts"`
-	MaxOutstandingBytes *int64        `json:"bytes_pending_max,omitempty"`
-	CurOutstandingBytes *int64        `json:"bytes_pending_current,omitempty"`
+	CurOutstandingBytes int64         `json:"bytes_pending_current"`
+	MaxOutstandingBytes *int64        `json:"bytes_pending_max"`
 }
 
 // ResponsePiecesEligible is the response payload returned by the .../eligible_pieces/{{sp_local|anywhere}} endpoints

@@ -13,7 +13,7 @@ const (
 	FilDefaultLookback  = 10
 	ApiMaxTipsetsBehind = 3 // keep in mind that a nul tipset is indistinguishable from loss of sync - do not set too low
 
-	MaxOutstandingGiB              = int64(1024)
+	MaxOutstandingGiB              = int64(4 * 1024)
 	ProposalStartDelayFromMidnight = (72 + 16) * filactor.EpochsInHour
 	ProposalDuration               = 532 * filactor.EpochsInDay
 )
