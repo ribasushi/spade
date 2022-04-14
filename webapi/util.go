@@ -25,10 +25,13 @@ type retEnvelope struct {
 	Response        interface{} `json:"response"`
 }
 
-func retPayloadAnnotated(c echo.Context, code int, payload interface{}, msg string, args ...interface{}) error {
+func retPayloadAnnotated(c echo.Context, code int, payload interface{}, fmsg string, args ...interface{}) error {
+
+	msg := fmt.Sprintf(fmsg, args...)
+
 	var lines []string
 	if msg != "" {
-		lines = strings.Split(fmt.Sprintf(msg, args...), "\n")
+		lines = strings.Split(msg, "\n")
 		longest := 0
 		for _, l := range lines {
 			encLen := len(l) + strings.Count(l, `"`)
@@ -58,6 +61,38 @@ func retPayloadAnnotated(c echo.Context, code int, payload interface{}, msg stri
 		r.InfoLines = lines
 	} else {
 		r.ErrLines = lines
+
+		if reqUUID := c.Request().Header.Get("X-REQUEST-UUID"); reqUUID != "" && msg != "" {
+
+			jPayload, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			if _, err := common.Db.Exec(
+				c.Request().Context(),
+				`
+				UPDATE requests SET
+					meta = JSONB_SET(
+						JSONB_SET(
+							COALESCE( meta, '{}' ),
+							'{ error }',
+							TO_JSONB( $1::TEXT )
+						),
+						'{ payload }',
+						$2::JSONB
+					)
+				WHERE
+					request_uuid = $3
+						AND
+					meta->'error' IS NULL
+				`,
+				msg,
+				jPayload,
+				reqUUID,
+			); err != nil {
+				return err
+			}
+		}
 	}
 
 	return c.JSONPretty(code, r, "  ")

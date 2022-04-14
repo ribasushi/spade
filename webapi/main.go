@@ -84,5 +84,5 @@ var logCfg = fmt.Sprintf("{%s}\n", strings.Join([]string{
 	`"op":"${method} ${host}${uri}"`,
 	`"status":${status}`,
 	`"error":"${error}"`,
-	`"latency_human":"${latency_human}"`,
+	`"took":"${latency_human}"`,
 }, ","))

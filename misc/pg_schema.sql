@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS evergreen.providers (
   )
 );
 
-CREATE TABLE IF NOT EXISTS evergreen.requests (
+CREATE UNLOGGED TABLE IF NOT EXISTS evergreen.requests (
   provider_id TEXT NOT NULL REFERENCES evergreen.providers ( provider_id ),
   request_uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
   entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
@@ -209,6 +209,7 @@ CREATE INDEX IF NOT EXISTS proposals_provider_idx ON evergreen.proposals ( provi
 CREATE INDEX IF NOT EXISTS proposals_piece_idx ON evergreen.proposals ( piece_cid );
 
 BEGIN;
+DROP VIEW IF EXISTS frontpage_stats_v0;
 DROP VIEW IF EXISTS deallist_v0;
 DROP MATERIALIZED VIEW IF EXISTS counts_pending;
 DROP MATERIALIZED VIEW IF EXISTS counts_replicas;
@@ -589,6 +590,54 @@ CREATE VIEW deallist_v0 AS (
     end_epoch,
     end_time
   FROM deallist_eligible
+);
+
+CREATE VIEW frontpage_stats_v0 AS (
+  WITH
+    active_totals AS (
+      SELECT
+          SUM( p.padded_size ) AS total_piece_bytes,
+          COUNT(*) AS total_deals_count
+        FROM pieces p
+        JOIN published_deals pd USING ( piece_cid )
+        JOIN clients c USING ( client_id )
+      WHERE
+        pd.status = 'active'
+          AND
+        c.is_affiliated
+    ),
+    active_unique AS (
+      SELECT
+          SUM( p.padded_size ) AS unique_piece_bytes,
+          COUNT(*) AS unique_deals_count
+        FROM pieces p
+      WHERE
+        piece_cid IN (
+          SELECT piece_cid
+            FROM published_deals pd
+            JOIN clients c USING ( client_id )
+          WHERE
+            pd.status = 'active'
+              AND
+            c.is_affiliated
+        )
+    ),
+    provstats AS (
+      SELECT
+          COUNT(DISTINCT(pd.provider_id)) AS unique_providers,
+          COUNT(DISTINCT(p.country)) AS unique_countries
+        FROM published_deals pd
+        JOIN clients c USING ( client_id )
+        JOIN providers p USING ( provider_id )
+      WHERE
+        pd.status != 'terminated'
+          AND
+        c.is_affiliated
+    ),
+    available_pieces AS (
+      SELECT COUNT(DISTINCT(piece_cid)) AS unique_available_cids FROM deallist_eligible
+    )
+  SELECT * FROM active_totals, active_unique, provstats, available_pieces
 );
 
 COMMIT;
