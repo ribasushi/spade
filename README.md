@@ -5,7 +5,7 @@ This is the engine powering the [`Filecoin Evergreen Program`](https://evergreen
 
 ## Terms and Eligibility
 
-- Participation implies your agreement to continuously serve accepted deals for a period of about **~530 days**, in an open manner, at a retrieval price of 0 ( meaning **free retrieval** ). There are no exceptions to this requirement, and it will be enforced systematically, with associated permanent records in the appropriate reputations systems.
+- Participation implies your agreement to continuously serve accepted Fil+ deals for a period of about **~532 days**, in an open manner, at storage and retrieval price of 0 ( meaning **free storage and retrieval** ). There are no exceptions to this requirement, and it will be enforced systematically, with associated permanent records in the appropriate reputations systems.
 - All deal proposals will be FilecoinPlus verified, with expected activation within **72 hours** from the time of request. They might come from any of the addresses listed in the [public client address list](https://api.evergreen.filecoin.io/public/clients.txt). Note that this list might get updated in the future, so refresh it periodically.
 - In order to participate, you [need to register](https://docs.google.com/forms/d/e/1FAIpQLSe5bpkD5RJeHGMNx3CpkV3a6UA2i7aroNE5DlGUdQF0mQU8DQ/viewform) your preexisting
 block-producing Filecoin storage-system. You will not be able to perform the API-calls below without completing this step and have a human approve your submission, usually within 2 business days. You also will not be able to request deals through this self-service system described above if your actor does not have the required minimum power, or is in a continuous faulty state.
@@ -47,7 +47,7 @@ block-producing Filecoin storage-system. You will not be able to perform the API
 
     `curl -sLH "Authorization: $( ./fil-spid.bash f0xxxx )" https://api.evergreen.filecoin.io/pending_proposals`
 
-    In order to prevent abuse you can have **at most 1TiB** (32 x 32GiB sectors) outstanding against your SP at any time.
+    In order to prevent abuse you can have **at most 4TiB** (128 x 32GiB sectors) outstanding against your SP at any time.
 
 4. Repeat steps 1, 2 and 3 over and over again (you can add them to a cronjob or something similar ). In case of any difficulties or issues, don't hesitate to contact us [in #slingshot-evergreen over at the Filecoin Slack](https://filecoinproject.slack.com/archives/C0377FJCG1L)
 
