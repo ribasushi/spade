@@ -167,7 +167,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 						SELECT 42
 							FROM published_deals pd
 						WHERE
-								pd.piece_cid = $1
+							pd.piece_cid = $1
 								AND
 							pd.provider_id = $2
 								AND

@@ -55,6 +55,7 @@ func apiListEligible(c echo.Context) error {
 	ctx := c.Request().Context()
 
 	// log.Info("entered")
+	// defer log.Info("left")
 
 	sp, err := filaddr.NewFromString(c.Response().Header().Get("X-FIL-SPID"))
 	if err != nil {
@@ -142,7 +143,7 @@ func apiListEligible(c echo.Context) error {
 					SELECT 42
 						FROM published_deals pd
 					WHERE
-						 pd.piece_cid = d.piece_cid
+						pd.piece_cid = d.piece_cid
 							AND
 						pd.provider_id = $1
 							AND
@@ -228,11 +229,10 @@ func apiListEligible(c echo.Context) error {
 					d.provider_id,
 					d.is_fil_plus,
 					d.end_time,
-					rc.counts AS counts_replicas,
-					pc.counts AS counts_pending
+					rc.active AS counts_replicas,
+					rc.pending AS counts_pending
 				FROM deallist_eligible d
-				JOIN counts_replicas rc USING ( piece_cid )
-				JOIN counts_pending pc USING ( piece_cid )
+				JOIN replica_counts rc USING ( piece_cid )
 			WHERE
 
 				-- exclude my own in-flight proposals / actives

@@ -211,30 +211,12 @@ CREATE INDEX IF NOT EXISTS proposals_piece_idx ON evergreen.proposals ( piece_ci
 BEGIN;
 DROP VIEW IF EXISTS frontpage_stats_v0;
 DROP VIEW IF EXISTS deallist_v0;
-DROP MATERIALIZED VIEW IF EXISTS counts_pending;
-DROP MATERIALIZED VIEW IF EXISTS counts_replicas;
+DROP MATERIALIZED VIEW IF EXISTS replica_counts;
 DROP MATERIALIZED VIEW IF EXISTS deallist_eligible;
 DROP MATERIALIZED VIEW IF EXISTS known_org_ids;
 DROP MATERIALIZED VIEW IF EXISTS known_cities;
 DROP MATERIALIZED VIEW IF EXISTS known_countries;
 DROP MATERIALIZED VIEW IF EXISTS known_continents;
-
-CREATE MATERIALIZED VIEW known_org_ids AS ( SELECT DISTINCT( org_id ) FROM providers WHERE org_id != '' );
-CREATE UNIQUE INDEX known_org_ids_key ON evergreen.known_org_ids ( org_id );
-ANALYZE known_org_ids;
-
-CREATE MATERIALIZED VIEW known_cities AS ( SELECT DISTINCT( city ) FROM providers WHERE city != '' );
-CREATE UNIQUE INDEX known_cities_key ON evergreen.known_cities ( city );
-ANALYZE known_cities;
-
-CREATE MATERIALIZED VIEW known_countries AS ( SELECT DISTINCT( country ) FROM providers WHERE country != '' );
-CREATE UNIQUE INDEX known_contries_key ON evergreen.known_countries ( country );
-ANALYZE known_countries;
-
-CREATE MATERIALIZED VIEW known_continents AS ( SELECT DISTINCT( continent ) FROM providers WHERE continent != '' );
-CREATE UNIQUE INDEX known_continents_key ON evergreen.known_continents ( continent );
-ANALYZE known_continents;
-
 
 CREATE MATERIALIZED VIEW deallist_eligible AS (
   WITH
@@ -337,16 +319,33 @@ CREATE INDEX deallist_eligible_country ON evergreen.deallist_eligible ( country 
 CREATE INDEX deallist_eligible_continent ON evergreen.deallist_eligible ( continent );
 ANALYZE evergreen.deallist_eligible;
 
-CREATE MATERIALIZED VIEW counts_replicas AS (
+
+CREATE MATERIALIZED VIEW known_org_ids AS ( SELECT DISTINCT( org_id ) FROM providers WHERE org_id != '' );
+CREATE UNIQUE INDEX known_org_ids_key ON evergreen.known_org_ids ( org_id );
+ANALYZE known_org_ids;
+
+CREATE MATERIALIZED VIEW known_cities AS ( SELECT DISTINCT( city ) FROM providers WHERE city != '' );
+CREATE UNIQUE INDEX known_cities_key ON evergreen.known_cities ( city );
+ANALYZE known_cities;
+
+CREATE MATERIALIZED VIEW known_countries AS ( SELECT DISTINCT( country ) FROM providers WHERE country != '' );
+CREATE UNIQUE INDEX known_contries_key ON evergreen.known_countries ( country );
+ANALYZE known_countries;
+
+CREATE MATERIALIZED VIEW known_continents AS ( SELECT DISTINCT( continent ) FROM providers WHERE continent != '' );
+CREATE UNIQUE INDEX known_continents_key ON evergreen.known_continents ( continent );
+ANALYZE known_continents;
+
+CREATE MATERIALIZED VIEW replica_counts AS (
   SELECT
     curpiece.piece_cid,
     (
-      SELECT JSONB_OBJECT_AGG( k,v ) FROM (
+      SELECT JSONB_STRIP_NULLS( JSONB_OBJECT_AGG( k,v ) ) FROM (
         (
           SELECT 'total' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
             SELECT 'total' AS k,
             (
-              SELECT COUNT(*)
+              SELECT NULLIF( COUNT(*), 0 )
                 FROM published_deals d
                 JOIN clients c USING ( client_id )
               WHERE
@@ -366,7 +365,7 @@ CREATE MATERIALIZED VIEW counts_replicas AS (
             SELECT
               curkey.org_id AS k,
               (
-                SELECT COUNT(*)
+                SELECT NULLIF( COUNT(*), 0 )
                   FROM published_deals d
                   JOIN clients c USING ( client_id )
                   JOIN providers p USING ( provider_id )
@@ -390,7 +389,7 @@ CREATE MATERIALIZED VIEW counts_replicas AS (
             SELECT
               curkey.city AS k,
               (
-                SELECT COUNT(*)
+                SELECT NULLIF( COUNT(*), 0 )
                   FROM published_deals d
                   JOIN clients c USING ( client_id )
                   JOIN providers p USING ( provider_id )
@@ -414,7 +413,7 @@ CREATE MATERIALIZED VIEW counts_replicas AS (
             SELECT
               curkey.country AS k,
               (
-                SELECT COUNT(*)
+                SELECT NULLIF( COUNT(*), 0 )
                   FROM published_deals d
                   JOIN clients c USING ( client_id )
                   JOIN providers p USING ( provider_id )
@@ -438,7 +437,7 @@ CREATE MATERIALIZED VIEW counts_replicas AS (
             SELECT
               curkey.continent AS k,
               (
-                SELECT COUNT(*)
+                SELECT NULLIF( COUNT(*), 0 )
                   FROM published_deals d
                   JOIN clients c USING ( client_id )
                   JOIN providers p USING ( provider_id )
@@ -457,22 +456,14 @@ CREATE MATERIALIZED VIEW counts_replicas AS (
           ) sagg ) AS v
         )
       ) agg
-    ) AS counts
-  FROM pieces curpiece
-);
-CREATE UNIQUE INDEX counts_replicas_piece_cid ON evergreen.counts_replicas ( piece_cid );
-ANALYZE evergreen.counts_replicas;
-
-CREATE MATERIALIZED VIEW counts_pending AS (
-  SELECT
-    curpiece.piece_cid,
+    ) AS active,
     (
-      SELECT JSONB_OBJECT_AGG( k,v ) FROM (
+      SELECT JSONB_STRIP_NULLS( JSONB_OBJECT_AGG( k,v ) ) FROM (
         (
           SELECT 'total' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
             SELECT 'total' AS k,
             (
-              SELECT COUNT(*)
+              SELECT NULLIF( COUNT(*), 0 )
                 FROM proposals pr
               WHERE
                 pr.piece_cid = curpiece.piece_cid
@@ -489,7 +480,7 @@ CREATE MATERIALIZED VIEW counts_pending AS (
             SELECT
               curkey.org_id AS k,
               (
-                SELECT COUNT(*)
+                SELECT NULLIF( COUNT(*), 0 )
                   FROM proposals pr
                   JOIN providers p USING ( provider_id )
                 WHERE
@@ -510,7 +501,7 @@ CREATE MATERIALIZED VIEW counts_pending AS (
             SELECT
               curkey.city AS k,
               (
-                SELECT COUNT(*)
+                SELECT NULLIF( COUNT(*), 0 )
                   FROM proposals pr
                   JOIN providers p USING ( provider_id )
                 WHERE
@@ -531,7 +522,7 @@ CREATE MATERIALIZED VIEW counts_pending AS (
             SELECT
               curkey.country AS k,
               (
-                SELECT COUNT(*)
+                SELECT NULLIF( COUNT(*), 0 )
                   FROM proposals pr
                   JOIN providers p USING ( provider_id )
                 WHERE
@@ -552,7 +543,7 @@ CREATE MATERIALIZED VIEW counts_pending AS (
             SELECT
               curkey.continent AS k,
               (
-                SELECT COUNT(*)
+                SELECT NULLIF( COUNT(*), 0 )
                   FROM proposals pr
                   JOIN providers p USING ( provider_id )
                 WHERE
@@ -568,12 +559,11 @@ CREATE MATERIALIZED VIEW counts_pending AS (
           ) sagg ) AS v
         )
       ) agg
-    ) AS counts
+    ) AS pending
   FROM pieces curpiece
 );
-CREATE UNIQUE INDEX counts_pending_piece_cid ON evergreen.counts_pending ( piece_cid );
-ANALYZE evergreen.counts_pending;
-
+CREATE UNIQUE INDEX replica_counts_piece_cid ON evergreen.replica_counts ( piece_cid );
+ANALYZE evergreen.replica_counts;
 
 CREATE VIEW deallist_v0 AS (
   SELECT

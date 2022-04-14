@@ -433,8 +433,7 @@ var trackDeals = &cli.Command{
 			`known_countries`,
 			`known_continents`,
 			`deallist_eligible`,
-			`counts_replicas`,
-			`counts_pending`,
+			`replica_counts`,
 		} {
 			if _, err = tx.Exec(ctx, `REFRESH MATERIALIZED VIEW CONCURRENTLY `+mv); err != nil {
 				return err
