@@ -10,46 +10,12 @@ import (
 	"time"
 
 	"github.com/filecoin-project/evergreen-dealer/common"
+	"github.com/filecoin-project/evergreen-dealer/webapi/types"
 	filaddr "github.com/filecoin-project/go-address"
 	"github.com/jackc/pgx/v4"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/xerrors"
 )
-
-type dataSource interface {
-	srcType() string
-	expiryUnixNano() int64
-	expiryCoarse() int64
-	sysID() string
-}
-
-type filSource struct {
-	SourceType string `json:"source_type"`
-	ProviderID string `json:"provider_id"`
-
-	// filecoin specific
-	DealID            int64      `json:"deal_id"`
-	DealExpiration    time.Time  `json:"deal_expiration"`
-	IsFilplus         bool       `json:"is_filplus"`
-	SectorID          *string    `json:"sector_id"`
-	SectorExpires     *time.Time `json:"sector_expires"`
-	SampleRetrieveCmd string     `json:"sample_retrieve_cmd"`
-
-	expUnixNano int64
-	expCoarse   int64
-	sysIDStr    string
-}
-
-var _ dataSource = &filSource{}
-
-type piece struct {
-	PieceCid         string       `json:"piece_cid"`
-	Dataset          *string      `json:"dataset"`
-	PaddedPieceSize  uint64       `json:"padded_piece_size"`
-	PayloadCids      []string     `json:"payload_cids"`
-	Sources          []dataSource `json:"sources"`
-	SampleRequestCmd string       `json:"sample_request_cmd"`
-}
 
 func apiListEligible(c echo.Context) error {
 	ctx := c.Request().Context()
@@ -279,12 +245,12 @@ func apiListEligible(c echo.Context) error {
 
 	type aggCounts map[string]map[string]int64
 
-	pieces := make(map[string]*piece, 1024)
+	pieces := make(map[string]*types.Piece, 1024)
 	seenPieceSpCombo := make(map[pieceSpCombo]int64, 32768)
 	ineligiblePcids := make(map[string]struct{}, 2048)
 	for rows.Next() {
-		s := filSource{SourceType: "Filecoin"}
-		var p piece
+		s := types.FilSource{SourceType: "Filecoin"}
+		var p types.Piece
 		var rOriginal, rNormalized string
 		var repCountsJSON, propCountsJSON *string
 
@@ -340,26 +306,26 @@ func apiListEligible(c echo.Context) error {
 			common.TrimCidString(rNormalized),
 		)
 
-		s.sysIDStr = fmt.Sprintf("%d", s.DealID)
-		s.expUnixNano = s.DealExpiration.UnixNano()
-		s.expCoarse = s.DealExpiration.Truncate(time.Hour * 24 * 7).UnixNano()
+		s.SysIDStr = fmt.Sprintf("%d", s.DealID)
+		s.ExpUnixNano = s.DealExpiration.UnixNano()
+		s.ExpCoarse = s.DealExpiration.Truncate(time.Hour * 24 * 7).UnixNano()
 
 		pieces[p.PieceCid].Sources = append(pieces[p.PieceCid].Sources, &s)
 	}
 
-	ret := make([]*piece, 0, 2048)
+	ret := make(types.ResponsePiecesEligible, 0, 2048)
 	for _, p := range pieces {
 		sort.Slice(p.Sources, func(i, j int) bool {
 			switch {
 
-			case p.Sources[i].srcType() != p.Sources[j].srcType():
-				return p.Sources[i].srcType() < p.Sources[j].srcType()
+			case p.Sources[i].SrcType() != p.Sources[j].SrcType():
+				return p.Sources[i].SrcType() < p.Sources[j].SrcType()
 
-			case p.Sources[i].expiryUnixNano() != p.Sources[j].expiryUnixNano():
-				return p.Sources[i].expiryUnixNano() > p.Sources[j].expiryUnixNano()
+			case p.Sources[i].ExpiryUnixNano() != p.Sources[j].ExpiryUnixNano():
+				return p.Sources[i].ExpiryUnixNano() > p.Sources[j].ExpiryUnixNano()
 
 			default:
-				return p.Sources[i].sysID() < p.Sources[j].sysID()
+				return p.Sources[i].SysID() < p.Sources[j].SysID()
 			}
 		})
 		ret = append(ret, p)
@@ -372,8 +338,8 @@ func apiListEligible(c echo.Context) error {
 
 		switch {
 
-		case si.expiryCoarse() != sj.expiryCoarse():
-			return si.expiryCoarse() < sj.expiryCoarse()
+		case si.ExpiryCoarse() != sj.ExpiryCoarse():
+			return si.ExpiryCoarse() < sj.ExpiryCoarse()
 
 		default:
 			return ret[i].PieceCid < ret[j].PieceCid
@@ -395,8 +361,3 @@ func apiListEligible(c echo.Context) error {
 
 	return retPayloadAnnotated(c, http.StatusOK, ret, info)
 }
-
-func (s *filSource) srcType() string       { return "Filecoin" }
-func (s *filSource) expiryCoarse() int64   { return s.expCoarse }
-func (s *filSource) expiryUnixNano() int64 { return s.expUnixNano }
-func (s *filSource) sysID() string         { return s.sysIDStr }

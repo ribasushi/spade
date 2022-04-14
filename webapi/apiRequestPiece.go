@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/filecoin-project/evergreen-dealer/common"
+	"github.com/filecoin-project/evergreen-dealer/webapi/types"
 	filaddr "github.com/filecoin-project/go-address"
 	gfm "github.com/filecoin-project/go-fil-markets/storagemarket"
 	filabi "github.com/filecoin-project/go-state-types/abi"
@@ -40,28 +41,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		return retFail(c, internalReason, ineligibleSpMsg(sp))
 	}
 
-	type tentativeCounts struct {
-		Total        int64 `json:"actual_total"`
-		InOrg        int64 `json:"actual_within_org"`
-		InCity       int64 `json:"actual_within_city"`
-		InCountry    int64 `json:"actual_within_country"`
-		InContinent  int64 `json:"actual_within_continent"`
-		Self         int64 `json:"actual_within_this_sp"`
-		MaxTotal     int64 `json:"program_max_total"`
-		MaxOrg       int64 `json:"program_max_per_org"`
-		MaxCity      int64 `json:"program_max_per_city"`
-		MaxCountry   int64 `json:"program_max_per_country"`
-		MaxContinent int64 `json:"program_max_per_continent"`
-		MaxSp        int64 `json:"program_max_per_sp"`
-	}
-
-	type ret struct {
-		TentativeCounts     tentativeCounts `json:"tentative_replica_counts"`
-		MaxOutstandingBytes *int64          `json:"bytes_pending_max,omitempty"`
-		CurOutstandingBytes *int64          `json:"bytes_pending_current,omitempty"`
-	}
-
-	cn := tentativeCounts{MaxSp: 1}
+	cn := types.ReplicaCounts{MaxSp: 1}
 	var isKnownPiece, isMineExpiring bool
 	var rCidStr *string
 	var customMidnightOffsetMins, curOutstandingBytes, customMaxOutstandingGiB, paddedPieceSize *int64
@@ -272,7 +252,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		curOutstandingBytes = new(int64)
 	}
 
-	r := ret{CurOutstandingBytes: curOutstandingBytes, MaxOutstandingBytes: &maxBytes}
+	r := types.ResponseDealRequest{CurOutstandingBytes: curOutstandingBytes, MaxOutstandingBytes: &maxBytes}
 
 	if *curOutstandingBytes >= maxBytes {
 		return retPayloadAnnotated(

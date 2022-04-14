@@ -11,21 +11,13 @@ import (
 
 	"github.com/dgraph-io/ristretto"
 	"github.com/filecoin-project/evergreen-dealer/common"
+	"github.com/filecoin-project/evergreen-dealer/webapi/types"
 	filaddr "github.com/filecoin-project/go-address"
 	"github.com/jackc/pgx/v4"
 	"github.com/labstack/echo/v4"
 )
 
-type retEnvelope struct {
-	RequestID       string      `json:"request_id,omitempty"`
-	ResponseCode    int         `json:"response_code"`
-	ErrLines        []string    `json:"error_lines,omitempty"`
-	InfoLines       []string    `json:"info_lines,omitempty"`
-	ResponseEntries *int        `json:"response_entries,omitempty"`
-	Response        interface{} `json:"response"`
-}
-
-func retPayloadAnnotated(c echo.Context, code int, payload interface{}, fmsg string, args ...interface{}) error {
+func retPayloadAnnotated(c echo.Context, code int, payload types.ResponsePayload, fmsg string, args ...interface{}) error {
 
 	msg := fmt.Sprintf(fmsg, args...)
 
@@ -44,7 +36,7 @@ func retPayloadAnnotated(c echo.Context, code int, payload interface{}, fmsg str
 		}
 	}
 
-	r := retEnvelope{
+	r := types.ResponseEnvelope{
 		RequestID:    c.Request().Header.Get("X-REQUEST-UUID"),
 		ResponseCode: code,
 		Response:     payload,
