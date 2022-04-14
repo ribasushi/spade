@@ -55,9 +55,7 @@ CREATE OR REPLACE
     LANGUAGE plpgsql
 AS $$
 BEGIN
-  IF NEW.entry_last_updated IS NULL THEN
-    NEW.entry_last_updated = NOW();
-  END IF;
+  NEW.entry_last_updated = NOW();
   RETURN NEW;
 END;
 $$;
@@ -199,7 +197,6 @@ CREATE TABLE IF NOT EXISTS evergreen.proposals (
   entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   entry_last_updated TIMESTAMP WITH TIME ZONE NOT NULL,
   CONSTRAINT singleton_piece_record UNIQUE ( provider_id, piece_cid, proposal_failstamp ),
-  CONSTRAINT no_fail_while_pending_activation CHECK ( proposal_success_cid IS NULL OR proposal_failstamp = 0 OR start_by <= entry_last_updated ),
   CONSTRAINT annotated_failure CHECK ( (proposal_failstamp = 0) = (meta->'failure' IS NULL) )
 );
 CREATE TRIGGER trigger_proposal_update_ts

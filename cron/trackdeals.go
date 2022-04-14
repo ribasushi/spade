@@ -400,7 +400,7 @@ var trackDeals = &cli.Command{
 					AND
 				activated_deal_id IS NULL
 					AND
-				NOW() > start_by
+				start_by < NOW()
 			`,
 		); err != nil {
 			return err
@@ -416,7 +416,7 @@ var trackDeals = &cli.Command{
 				meta = JSONB_SET(
 					COALESCE( meta, '{}' ),
 					'{ failure }',
-					TO_JSONB( 'containing deal ' || activated_deal_id || ' terminated' )
+					TO_JSONB( 'sector containing deal ' || activated_deal_id || ' terminated' )
 				)
 			WHERE
 				activated_deal_id IN ( SELECT deal_id FROM published_deals WHERE status = 'terminated' )

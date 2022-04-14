@@ -126,7 +126,7 @@ var proposePending = &cli.Command{
 								meta = JSONB_SET(
 									COALESCE( meta, '{}'),
 									'{ failure }',
-									TO_JSONB($2)
+									TO_JSONB($2::TEXT)
 								)
 							WHERE
 								provider_id = $3
