@@ -251,10 +251,10 @@ func apiListEligible(c echo.Context) error {
 	for rows.Next() {
 		s := types.FilSource{SourceType: "Filecoin"}
 		var p types.Piece
-		var rOriginal, rNormalized string
+		var rNormalized string
 		var repCountsJSON, propCountsJSON *string
 
-		if err = rows.Scan(&p.Dataset, &p.PaddedPieceSize, &p.PieceCid, &s.DealID, &rOriginal, &rNormalized, &s.ProviderID, &s.IsFilplus, &s.DealExpiration, &repCountsJSON, &propCountsJSON); err != nil {
+		if err = rows.Scan(&p.Dataset, &p.PaddedPieceSize, &p.PieceCid, &s.DealID, &s.OriginalPayloadCid, &rNormalized, &s.ProviderID, &s.IsFilplus, &s.DealExpiration, &repCountsJSON, &propCountsJSON); err != nil {
 			return err
 		}
 
@@ -301,7 +301,7 @@ func apiListEligible(c echo.Context) error {
 		s.SampleRetrieveCmd = fmt.Sprintf(
 			"lotus client retrieve --provider %s --maxPrice 0 --allow-local --car '%s' %s__%s.car",
 			s.ProviderID,
-			rOriginal,
+			s.OriginalPayloadCid,
 			common.TrimCidString(p.PieceCid),
 			common.TrimCidString(rNormalized),
 		)

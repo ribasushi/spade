@@ -92,12 +92,13 @@ type FilSource struct {
 	ProviderID string `json:"provider_id"`
 
 	// filecoin specific
-	DealID            int64      `json:"deal_id"`
-	DealExpiration    time.Time  `json:"deal_expiration"`
-	IsFilplus         bool       `json:"is_filplus"`
-	SectorID          *string    `json:"sector_id"`
-	SectorExpires     *time.Time `json:"sector_expires"`
-	SampleRetrieveCmd string     `json:"sample_retrieve_cmd"`
+	DealID             int64      `json:"deal_id"`
+	OriginalPayloadCid string     `json:"original_payload_cid"`
+	DealExpiration     time.Time  `json:"deal_expiration"`
+	IsFilplus          bool       `json:"is_filplus"`
+	SectorID           *string    `json:"sector_id"`
+	SectorExpires      *time.Time `json:"sector_expires"`
+	SampleRetrieveCmd  string     `json:"sample_retrieve_cmd"`
 
 	ExpUnixNano int64  `json:"-"`
 	ExpCoarse   int64  `json:"-"`
