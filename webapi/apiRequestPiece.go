@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +23,10 @@ import (
 func apiRequestPiece(c echo.Context) (defErr error) {
 	ctx := c.Request().Context()
 	spID := c.Response().Header().Get("X-FIL-SPID")
+	spSize, err := strconv.ParseUint(c.Response().Header().Get("X-FIL-SPSIZE"), 10, 64)
+	if err != nil {
+		return err
+	}
 
 	pcidStr := c.Param("pieceCID")
 	pCid, err := cid.Parse(pcidStr)
@@ -232,6 +237,9 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 
 	if !isKnownPiece {
 		return retFail(c, nil, "Piece CID '%s' is not known to the system", pcidStr)
+	}
+	if uint64(*paddedPieceSize) > spSize {
+		return retFail(c, nil, "Piece CID '%s' weighing %d GiB is larger than the %d GiB sector size your SP supports", pcidStr, *paddedPieceSize>>30, spSize>>30)
 	}
 
 	rCid, err := cid.Parse(*rCidStr)

@@ -19,6 +19,10 @@ import (
 func apiListEligible(c echo.Context) error {
 	ctx := c.Request().Context()
 	spID := c.Response().Header().Get("X-FIL-SPID")
+	spSize, err := strconv.ParseUint(c.Response().Header().Get("X-FIL-SPSIZE"), 10, 64)
+	if err != nil {
+		return err
+	}
 
 	// log.Info("entered")
 	// defer log.Info("left")
@@ -96,6 +100,10 @@ func apiListEligible(c echo.Context) error {
 
 					AND
 
+				d.padded_size <= $2
+
+					AND
+
 				d.end_time < expiration_cutoff()
 
 					AND
@@ -147,6 +155,7 @@ func apiListEligible(c echo.Context) error {
 				)
 			`,
 			spID,
+			spSize,
 		)
 	} else {
 		info = strings.Join([]string{
@@ -197,6 +206,10 @@ func apiListEligible(c echo.Context) error {
 				JOIN replica_counts rc USING ( piece_cid )
 			WHERE
 
+				d.padded_size <= $1
+
+					AND
+
 				-- exclude my own in-flight proposals / actives
 				NOT EXISTS (
 					SELECT 42
@@ -208,7 +221,7 @@ func apiListEligible(c echo.Context) error {
 							AND
 						pr.activated_deal_id IS NULL
 							AND
-						pr.provider_id = $1
+						pr.provider_id = $2
 				)
 
 					AND
@@ -221,9 +234,10 @@ func apiListEligible(c echo.Context) error {
 							AND
 						pd.status != 'terminated'
 							AND
-						pd.provider_id = $1
+						pd.provider_id = $2
 				)
 			`,
+			spSize,
 			spID,
 		)
 	}
@@ -259,6 +273,9 @@ func apiListEligible(c echo.Context) error {
 		}
 		seenPieceSpCombo[pieceSpCombo{pcid: p.PieceCid, spid: s.ProviderID}] = s.DealID
 
+		if p.PaddedPieceSize > spSize {
+			continue
+		}
 		if _, ineligible := ineligiblePcids[p.PieceCid]; ineligible {
 			continue
 		}

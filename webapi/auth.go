@@ -41,6 +41,7 @@ type sigChallenge struct {
 
 type verifySigResult struct {
 	invalidSigErrstr string
+	spSize           filabi.SectorSize
 }
 
 var (
@@ -138,6 +139,8 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 
 		// part of response, also used as globals for rest of request
 		c.Response().Header().Set("X-FIL-SPID", challenge.spID.String())
+		c.Response().Header().Set("X-FIL-SPSIZE", vsr.spSize.String())
+
 		return next(c)
 	}
 }
@@ -202,5 +205,5 @@ func verifySig(c echo.Context, challenge sigChallenge) (verifySigResult, error) 
 		}, nil
 	}
 
-	return verifySigResult{}, nil
+	return verifySigResult{spSize: mi.SectorSize}, nil
 }
