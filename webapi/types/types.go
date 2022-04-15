@@ -130,7 +130,7 @@ func (s *FilSource) InitDerivedVals() { //nolint:revive
 	s.expCoarse = s.DealExpiration.Truncate(time.Hour * 24 * 7).UnixNano()
 
 	s.SampleRetrieveCmd = fmt.Sprintf(
-		"lotus client retrieve --provider %s --maxPrice 0 --allow-local --car '%s' %s__%s.car",
+		"lotus client retrieve --provider %s --maxPrice 0 --allow-local --car '%s' $(pwd)/%s__%s.car",
 		s.ProviderID,
 		s.OriginalPayloadCid,
 		common.TrimCidString(s.PieceCid),
