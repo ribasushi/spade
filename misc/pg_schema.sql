@@ -51,6 +51,14 @@ AS $$
 $$;
 
 CREATE OR REPLACE
+  FUNCTION evergreen.valid_cid(TEXT) RETURNS BOOLEAN
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE
+AS $$
+  SELECT ( SUBSTRING( $1 FROM 1 FOR 2 ) = 'ba' OR SUBSTRING( $1 FROM 1 FOR 2 ) = 'Qm' )
+$$;
+
+
+CREATE OR REPLACE
   FUNCTION evergreen.update_entry_timestamp() RETURNS TRIGGER
     LANGUAGE plpgsql
 AS $$
@@ -99,7 +107,7 @@ CREATE INDEX IF NOT EXISTS pieces_padded_size_idx ON evergreen.pieces ( padded_s
 
 CREATE TABLE IF NOT EXISTS evergreen.payloads (
   piece_cid TEXT NOT NULL REFERENCES evergreen.pieces ( piece_cid ),
-  payload_cid TEXT NOT NULL CONSTRAINT valid_rcid CHECK ( evergreen.valid_cid_v1( payload_cid ) ),
+  payload_cid TEXT NOT NULL CONSTRAINT valid_rcid CHECK ( evergreen.valid_cid( payload_cid ) ),
   CONSTRAINT payload_piece UNIQUE ( payload_cid, piece_cid ),
   CONSTRAINT temp_single_root UNIQUE ( piece_cid ),
   meta JSONB
@@ -154,7 +162,7 @@ CREATE TABLE IF NOT EXISTS evergreen.published_deals (
   provider_id TEXT NOT NULL REFERENCES evergreen.providers ( provider_id ),
   client_id TEXT NOT NULL REFERENCES evergreen.clients ( client_id ),
   label BYTEA NOT NULL,
-  decoded_label TEXT CONSTRAINT valid_cid CHECK ( evergreen.valid_cid_v1( decoded_label ) ),
+  decoded_label TEXT CONSTRAINT valid_label_cid CHECK ( evergreen.valid_cid( decoded_label ) ),
   is_filplus BOOL NOT NULL,
   status TEXT NOT NULL,
   status_meta TEXT,

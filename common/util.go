@@ -2,16 +2,7 @@ package common
 
 import (
 	"regexp"
-
-	"github.com/ipfs/go-cid"
 )
-
-func CidV1(c cid.Cid) cid.Cid {
-	if c.Version() == 1 {
-		return c
-	}
-	return cid.NewCidV1(c.Type(), c.Hash())
-}
 
 const (
 	cidTrimPrefix = 6

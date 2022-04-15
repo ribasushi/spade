@@ -252,7 +252,7 @@ var trackDeals = &cli.Command{
 
 			var labelCid *string
 			if lc, err := cid.Parse(d.Proposal.Label); err == nil {
-				lcs := common.CidV1(lc).String()
+				lcs := lc.String()
 				labelCid = &lcs
 			}
 
