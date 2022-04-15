@@ -68,7 +68,21 @@ func apiListPendingProposals(c echo.Context) error {
 				(pr.dealstart_payload->'DealStartEpoch')::BIGINT AS start_epoch,
 				p.piece_cid,
 				p.padded_size,
-				pl.payload_cid
+				pl.payload_cid,
+				(
+					EXISTS (
+						SELECT 42
+							FROM published_deals pd
+						WHERE
+							pd.piece_cid = p.piece_cid
+								AND
+							pd.provider_id = pr.provider_id
+								AND
+							pd.client_id = pr.client_id
+								AND
+							pd.status = 'published'
+					)
+				) AS is_published
 			FROM proposals pr
 			JOIN pieces p USING ( piece_cid )
 			JOIN payloads pl USING ( piece_cid )
@@ -86,13 +100,14 @@ func apiListPendingProposals(c echo.Context) error {
 	}
 	defer rows.Close()
 
-	var totalSize, countPendingProposals int64
+	var totalSize, countPendingProposals, countPublishedDeals int64
 	fails := make(map[int64]types.ProposalFailure, 128)
 	for rows.Next() {
 		var prop types.DealProposal
 		var dCid, failure *string
 		var failstamp int64
-		if err = rows.Scan(&dCid, &failstamp, &failure, &prop.StartTime, &prop.StartEpoch, &prop.PieceCid, &prop.PieceSize, &prop.RootCid); err != nil {
+		var isPublished bool
+		if err = rows.Scan(&dCid, &failstamp, &failure, &prop.StartTime, &prop.StartEpoch, &prop.PieceCid, &prop.PieceSize, &prop.RootCid, &isPublished); err != nil {
 			return err
 		}
 
@@ -113,6 +128,8 @@ func apiListPendingProposals(c echo.Context) error {
 
 		if dCid == nil {
 			countPendingProposals++
+		} else if isPublished {
+			countPublishedDeals++
 		} else {
 			prop.DealCid = *dCid
 			prop.HoursRemaining = int(time.Until(prop.StartTime).Truncate(time.Hour).Hours())
@@ -145,10 +162,16 @@ func apiListPendingProposals(c echo.Context) error {
 	msg := strings.Join([]string{
 		"This is an overview of deals recently proposed to SP " + spID,
 		fmt.Sprintf(
-			"There currently are %d proposals to send out, and %d successful proposals totalling %0.2f GiB awaiting sealing.",
+			`
+There currently are %0.2f GiB of pending deals:
+  % 4d deal-proposals to send out
+  % 4d successful proposals pending publishing
+  % 4d deals published on chain awaiting sector activation
+`,
+			float64(r.CurOutstandingBytes)/(1<<30),
 			countPendingProposals,
 			len(r.PendingProposals),
-			float64(r.CurOutstandingBytes)/(1<<30),
+			countPublishedDeals,
 		),
 	}, "\n")
 
