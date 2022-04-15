@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -60,38 +61,62 @@ func apiListPendingProposals(c echo.Context) error {
 	rows, err := common.Db.Query(
 		ctx,
 		`
+		WITH
+			prelist AS (
+				SELECT
+						pr.proposal_success_cid,
+						pr.proposal_failstamp,
+						pr.meta->>'failure',
+						pr.start_by,
+						(pr.dealstart_payload->'DealStartEpoch')::BIGINT AS start_epoch,
+						p.piece_cid,
+						p.padded_size,
+						pl.payload_cid,
+						(
+							EXISTS (
+								SELECT 42
+									FROM published_deals pd
+								WHERE
+									pd.piece_cid = p.piece_cid
+										AND
+									pd.provider_id = pr.provider_id
+										AND
+									pd.client_id = pr.client_id
+										AND
+									pd.status = 'published'
+							)
+						) AS is_published
+					FROM proposals pr
+					JOIN pieces p USING ( piece_cid )
+					JOIN payloads pl USING ( piece_cid )
+				WHERE
+					pr.provider_id = $1
+						AND
+					( pr.start_by - NOW() ) > '1 hour'::INTERVAL
+						AND
+					pr.activated_deal_id is NULL
+			)
 		SELECT
-				pr.proposal_success_cid,
-				pr.proposal_failstamp,
-				pr.meta->>'failure',
-				pr.start_by,
-				(pr.dealstart_payload->'DealStartEpoch')::BIGINT AS start_epoch,
-				p.piece_cid,
-				p.padded_size,
-				pl.payload_cid,
-				(
-					EXISTS (
-						SELECT 42
-							FROM published_deals pd
-						WHERE
-							pd.piece_cid = p.piece_cid
-								AND
-							pd.provider_id = pr.provider_id
-								AND
-							pd.client_id = pr.client_id
-								AND
-							pd.status = 'published'
-					)
-				) AS is_published
-			FROM proposals pr
-			JOIN pieces p USING ( piece_cid )
-			JOIN payloads pl USING ( piece_cid )
-		WHERE
-			pr.provider_id = $1
-				AND
-			( pr.start_by - NOW() ) > '1 hour'::INTERVAL
-				AND
-			pr.activated_deal_id is NULL
+			prelist.*,
+			(
+				SELECT JSONB_AGG(JSONB_STRIP_NULLS(s)) FROM (
+					SELECT
+						JSONB_BUILD_OBJECT(
+							'provider_id', de.provider_id,
+							'deal_id', de.deal_id,
+							'original_payload_cid', de.original_payload_cid,
+							'deal_expiration', de.end_time,
+							'is_filplus', de.is_filplus
+						) AS s
+						FROM deallist_eligible de
+					WHERE
+						de.piece_cid = prelist.piece_cid
+							AND
+						NOT prelist.is_published
+					ORDER BY is_filplus DESC, de.end_time DESC
+				) subq
+			) AS sources
+		FROM prelist
 		`,
 		spID,
 	)
@@ -104,10 +129,10 @@ func apiListPendingProposals(c echo.Context) error {
 	fails := make(map[int64]types.ProposalFailure, 128)
 	for rows.Next() {
 		var prop types.DealProposal
-		var dCid, failure *string
+		var dCid, failure, sourcesJSON *string
 		var failstamp int64
 		var isPublished bool
-		if err = rows.Scan(&dCid, &failstamp, &failure, &prop.StartTime, &prop.StartEpoch, &prop.PieceCid, &prop.PieceSize, &prop.RootCid, &isPublished); err != nil {
+		if err = rows.Scan(&dCid, &failstamp, &failure, &prop.StartTime, &prop.StartEpoch, &prop.PieceCid, &prop.PieceSize, &prop.RootCid, &isPublished, &sourcesJSON); err != nil {
 			return err
 		}
 
@@ -138,6 +163,21 @@ func apiListPendingProposals(c echo.Context) error {
 				common.TrimCidString(prop.PieceCid),
 				common.TrimCidString(prop.RootCid),
 			)
+			if sourcesJSON != nil {
+				var fs []*types.FilSource
+				if err = json.Unmarshal([]byte(*sourcesJSON), &fs); err != nil {
+					return err
+				}
+				if len(fs) > 0 {
+					prop.Sources = make([]types.DataSource, len(fs))
+					for i := range fs {
+						fs[i].PieceCid = prop.PieceCid
+						fs[i].NormalizedPayloadCid = prop.RootCid
+						fs[i].InitDerivedVals()
+						prop.Sources[i] = fs[i]
+					}
+				}
+			}
 			r.PendingProposals = append(r.PendingProposals, prop)
 		}
 	}

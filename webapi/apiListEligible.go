@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/filecoin-project/evergreen-dealer/common"
 	"github.com/filecoin-project/evergreen-dealer/webapi/types"
@@ -259,12 +258,11 @@ func apiListEligible(c echo.Context) error {
 	seenPieceSpCombo := make(map[pieceSpCombo]int64, 32768)
 	ineligiblePcids := make(map[string]struct{}, 2048)
 	for rows.Next() {
-		s := types.FilSource{SourceType: "Filecoin"}
+		var s types.FilSource
 		var p types.Piece
-		var rNormalized string
 		var repCountsJSON, propCountsJSON *string
 
-		if err = rows.Scan(&p.Dataset, &p.PaddedPieceSize, &p.PieceCid, &s.DealID, &s.OriginalPayloadCid, &rNormalized, &s.ProviderID, &s.IsFilplus, &s.DealExpiration, &repCountsJSON, &propCountsJSON); err != nil {
+		if err = rows.Scan(&p.Dataset, &p.PaddedPieceSize, &p.PieceCid, &s.DealID, &s.OriginalPayloadCid, &s.NormalizedPayloadCid, &s.ProviderID, &s.IsFilplus, &s.DealExpiration, &repCountsJSON, &propCountsJSON); err != nil {
 			return err
 		}
 
@@ -302,7 +300,7 @@ func apiListEligible(c echo.Context) error {
 				}
 			}
 
-			p.PayloadCids = append(p.PayloadCids, rNormalized)
+			p.PayloadCids = append(p.PayloadCids, s.NormalizedPayloadCid)
 			p.SampleRequestCmd = fmt.Sprintf(
 				`echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" https://api.evergreen.filecoin.io/request_piece/%s | sh`,
 				spID,
@@ -311,18 +309,8 @@ func apiListEligible(c echo.Context) error {
 			pieces[p.PieceCid] = &p
 		}
 
-		s.SampleRetrieveCmd = fmt.Sprintf(
-			"lotus client retrieve --provider %s --maxPrice 0 --allow-local --car '%s' %s__%s.car",
-			s.ProviderID,
-			s.OriginalPayloadCid,
-			common.TrimCidString(p.PieceCid),
-			common.TrimCidString(rNormalized),
-		)
-
-		s.SysIDStr = fmt.Sprintf("%d", s.DealID)
-		s.ExpUnixNano = s.DealExpiration.UnixNano()
-		s.ExpCoarse = s.DealExpiration.Truncate(time.Hour * 24 * 7).UnixNano()
-
+		s.PieceCid = p.PieceCid
+		s.InitDerivedVals()
 		pieces[p.PieceCid].Sources = append(pieces[p.PieceCid].Sources, &s)
 	}
 

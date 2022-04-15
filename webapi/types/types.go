@@ -1,6 +1,11 @@
 package types
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"github.com/filecoin-project/evergreen-dealer/common"
+)
 
 // ResponseEnvelope is the structure wrapping all responses from the Evergreen engine
 type ResponseEnvelope struct {
@@ -14,7 +19,7 @@ type ResponseEnvelope struct {
 
 type isResponsePayload struct{}
 
-type ResponsePayload interface {
+type ResponsePayload interface { //nolint:revive
 	is() isResponsePayload
 }
 
@@ -40,25 +45,26 @@ func (ResponsePendingProposals) is() isResponsePayload { return isResponsePayloa
 func (ResponseDealRequest) is() isResponsePayload      { return isResponsePayload{} }
 func (ResponsePiecesEligible) is() isResponsePayload   { return isResponsePayload{} }
 
-type ProposalFailure struct {
+type ProposalFailure struct { //nolint:revive
 	Tstamp   time.Time `json:"timestamp"`
 	Err      string    `json:"error"`
 	PieceCid string    `json:"piece_cid"`
 	RootCid  string    `json:"root_cid"`
 }
 
-type DealProposal struct {
-	DealCid        string    `json:"deal_proposal_cid"`
-	HoursRemaining int       `json:"hours_remaining"`
-	PieceSize      int64     `json:"piece_size"`
-	PieceCid       string    `json:"piece_cid"`
-	RootCid        string    `json:"root_cid"`
-	StartTime      time.Time `json:"deal_start_time"`
-	StartEpoch     int64     `json:"deal_start_epoch"`
-	ImportCMD      string    `json:"sample_import_cmd"`
+type DealProposal struct { //nolint:revive
+	DealCid        string       `json:"deal_proposal_cid"`
+	HoursRemaining int          `json:"hours_remaining"`
+	PieceSize      int64        `json:"piece_size"`
+	PieceCid       string       `json:"piece_cid"`
+	RootCid        string       `json:"root_cid"`
+	StartTime      time.Time    `json:"deal_start_time"`
+	StartEpoch     int64        `json:"deal_start_epoch"`
+	ImportCMD      string       `json:"sample_import_cmd"`
+	Sources        []DataSource `json:"sources,omitempty"`
 }
 
-type ReplicaCounts struct {
+type ReplicaCounts struct { //nolint:revive
 	Total        int64 `json:"actual_total"`
 	InOrg        int64 `json:"actual_within_org"`
 	InCity       int64 `json:"actual_within_city"`
@@ -73,7 +79,7 @@ type ReplicaCounts struct {
 	MaxSp        int64 `json:"program_max_per_sp"`
 }
 
-type Piece struct {
+type Piece struct { //nolint:revive
 	PieceCid         string       `json:"piece_cid"`
 	Dataset          *string      `json:"dataset"`
 	PaddedPieceSize  uint64       `json:"padded_piece_size"`
@@ -82,14 +88,14 @@ type Piece struct {
 	SampleRequestCmd string       `json:"sample_request_cmd"`
 }
 
-type DataSource interface {
+type DataSource interface { //nolint:revive
 	SrcType() string
 	ExpiryUnixNano() int64
 	ExpiryCoarse() int64
 	SysID() string
 }
 
-type FilSource struct {
+type FilSource struct { //nolint:revive
 	SourceType string `json:"source_type"`
 	ProviderID string `json:"provider_id"`
 
@@ -102,14 +108,32 @@ type FilSource struct {
 	SectorExpires      *time.Time `json:"sector_expires"`
 	SampleRetrieveCmd  string     `json:"sample_retrieve_cmd"`
 
-	ExpUnixNano int64  `json:"-"`
-	ExpCoarse   int64  `json:"-"`
-	SysIDStr    string `json:"-"`
+	PieceCid             string `json:"-"`
+	NormalizedPayloadCid string `json:"-"`
+
+	expUnixNano int64
+	expCoarse   int64
+	sysIDStr    string
 }
 
 var _ DataSource = &FilSource{}
 
-func (s *FilSource) SrcType() string       { return "Filecoin" }
-func (s *FilSource) ExpiryCoarse() int64   { return s.ExpCoarse }
-func (s *FilSource) ExpiryUnixNano() int64 { return s.ExpUnixNano }
-func (s *FilSource) SysID() string         { return s.SysIDStr }
+func (s *FilSource) SrcType() string       { return s.SourceType }  //nolint:revive
+func (s *FilSource) ExpiryCoarse() int64   { return s.expCoarse }   //nolint:revive
+func (s *FilSource) ExpiryUnixNano() int64 { return s.expUnixNano } //nolint:revive
+func (s *FilSource) SysID() string         { return s.sysIDStr }    //nolint:revive
+
+func (s *FilSource) InitDerivedVals() { //nolint:revive
+	s.SourceType = "Filecoin"
+	s.sysIDStr = fmt.Sprintf("%d", s.DealID)
+	s.expUnixNano = s.DealExpiration.UnixNano()
+	s.expCoarse = s.DealExpiration.Truncate(time.Hour * 24 * 7).UnixNano()
+
+	s.SampleRetrieveCmd = fmt.Sprintf(
+		"lotus client retrieve --provider %s --maxPrice 0 --allow-local --car '%s' %s__%s.car",
+		s.ProviderID,
+		s.OriginalPayloadCid,
+		common.TrimCidString(s.PieceCid),
+		common.TrimCidString(s.NormalizedPayloadCid),
+	)
+}
