@@ -39,6 +39,10 @@ type sigChallenge struct {
 	}
 }
 
+type verifySigResult struct {
+	invalidSigErrstr string
+}
+
 var (
 	authRe            = regexp.MustCompile(`^` + authScheme + `\s+([0-9]+)\s*;\s*([ft]0[0-9]+)\s*;\s*(2)\s*;\s*([^; ]+)\s*$`)
 	challengeCache, _ = lru.New(sigGraceEpochs * 128)
@@ -77,22 +81,23 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 			return retAuthFail(c, "FIL-SPID auth epoch '%d' is too far in the past", challenge.epoch)
 		}
 
-		var authErr string
-		if maybeErr, known := challengeCache.Get(challenge.hdr); known {
-			authErr = maybeErr.(string)
+		var vsr verifySigResult
+		if maybeResult, known := challengeCache.Get(challenge.hdr); known {
+			vsr = maybeResult.(verifySigResult)
 		} else {
-			authErr, err = verifySig(c, challenge)
+			vsr, err = verifySig(c, challenge)
 			if err != nil {
 				return err
 			}
-			challengeCache.Add(challenge.hdr, authErr)
+			challengeCache.Add(challenge.hdr, vsr)
 		}
 
-		if authErr != "" {
-			return retAuthFail(c, authErr)
+		if vsr.invalidSigErrstr != "" {
+			return retAuthFail(c, vsr.invalidSigErrstr)
 		}
 
-		c.Request().Header.Set("X-AUTHED-SP", challenge.spID.String())
+		// set only on request object for logging, not part of response
+		c.Request().Header.Set("X-LOGGED-SP", challenge.spID.String())
 
 		// if challenge.spID.String() == "f01" {
 		// 	challenge.spID, _ = filaddr.NewFromString("f02")
@@ -128,23 +133,29 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 			return err
 		}
 
+		// set only on request object for logging, not part of response
 		c.Request().Header.Set("X-REQUEST-UUID", requestUUID)
-		c.Request().Header.Set("X-FIL-SPID", challenge.spID.String())
+
+		// part of response, also used as globals for rest of request
 		c.Response().Header().Set("X-FIL-SPID", challenge.spID.String())
 		return next(c)
 	}
 }
 
-func verifySig(c echo.Context, challenge sigChallenge) (string, error) {
+func verifySig(c echo.Context, challenge sigChallenge) (verifySigResult, error) {
 
 	// a worker can only be a BLS key
 	if challenge.hdr.sigType != fmt.Sprintf("%d", filcrypto.SigTypeBLS) {
-		return fmt.Sprintf("unexpected FIL-SPID auth signature type '%s'", challenge.hdr.sigType), nil
+		return verifySigResult{
+			invalidSigErrstr: fmt.Sprintf("unexpected FIL-SPID auth signature type '%s'", challenge.hdr.sigType),
+		}, nil
 	}
 
 	sig, err := base64.StdEncoding.DecodeString(challenge.hdr.sigB64)
 	if err != nil {
-		return fmt.Sprintf("unexpected FIL-SPID auth signature encoding '%s'", challenge.hdr.sigB64), nil
+		return verifySigResult{
+			invalidSigErrstr: fmt.Sprintf("unexpected FIL-SPID auth signature encoding '%s'", challenge.hdr.sigB64),
+		}, nil
 	}
 
 	ctx := c.Request().Context()
@@ -155,22 +166,22 @@ func verifySig(c echo.Context, challenge sigChallenge) (string, error) {
 	} else {
 		be, err = common.LotusAPI.BeaconGetEntry(ctx, filabi.ChainEpoch(challenge.epoch))
 		if err != nil {
-			return "", err
+			return verifySigResult{}, err
 		}
 		beaconCache.Add(challenge.epoch, be)
 	}
 
 	miFinTs, err := common.LotusAPI.ChainGetTipSetByHeight(ctx, filabi.ChainEpoch(challenge.epoch)-filbuild.Finality, types.EmptyTSK)
 	if err != nil {
-		return "", err
+		return verifySigResult{}, err
 	}
 	mi, err := common.LotusAPI.StateMinerInfo(ctx, challenge.spID, miFinTs.Key())
 	if err != nil {
-		return "", err
+		return verifySigResult{}, err
 	}
 	workerAddr, err := common.LotusAPI.StateAccountKey(ctx, mi.Worker, miFinTs.Key())
 	if err != nil {
-		return "", err
+		return verifySigResult{}, err
 	}
 
 	sigMatch, err := common.LotusAPI.WalletVerify(
@@ -183,11 +194,13 @@ func verifySig(c echo.Context, challenge sigChallenge) (string, error) {
 		},
 	)
 	if err != nil {
-		return "", err
+		return verifySigResult{}, err
 	}
 	if !sigMatch {
-		return fmt.Sprintf("FIL-SPID signature validation failed for auth header '%s'", challenge.authHdr), nil
+		return verifySigResult{
+			invalidSigErrstr: fmt.Sprintf("FIL-SPID signature validation failed for auth header '%s'", challenge.authHdr),
+		}, nil
 	}
 
-	return "", nil
+	return verifySigResult{}, nil
 }

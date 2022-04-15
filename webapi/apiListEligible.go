@@ -11,7 +11,6 @@ import (
 
 	"github.com/filecoin-project/evergreen-dealer/common"
 	"github.com/filecoin-project/evergreen-dealer/webapi/types"
-	filaddr "github.com/filecoin-project/go-address"
 	"github.com/jackc/pgx/v4"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/xerrors"
@@ -19,29 +18,26 @@ import (
 
 func apiListEligible(c echo.Context) error {
 	ctx := c.Request().Context()
+	spID := c.Response().Header().Get("X-FIL-SPID")
 
 	// log.Info("entered")
 	// defer log.Info("left")
 
-	sp, err := filaddr.NewFromString(c.Response().Header().Get("X-FIL-SPID"))
-	if err != nil {
-		return err
-	}
-
 	lim := uint64(128)
 	limStr := c.QueryParams().Get("limit")
 	if limStr != "" {
+		var err error
 		lim, err = strconv.ParseUint(limStr, 10, 64)
 		if err != nil {
 			return retFail(c, nil, "provided limit '%s' is not a valid integer", limStr)
 		}
 	}
 
-	internalReason, err := spIneligibleReason(ctx, sp)
+	internalReason, err := spIneligibleReason(ctx, spID)
 	if err != nil {
 		return err
 	} else if internalReason != "" {
-		return retFail(c, internalReason, ineligibleSpMsg(sp))
+		return retFail(c, internalReason, ineligibleSpMsg(spID))
 	}
 
 	// only query them in the `anywhere` case
@@ -55,7 +51,7 @@ func apiListEligible(c echo.Context) error {
 		"and can proceed to `lotus-miner storage-deals import-data ...` the corresponding car file.",
 		``,
 		`In order to see what proposals you have currently pending, you can invoke:`,
-		fmt.Sprintf(` echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" 'https://api.evergreen.filecoin.io/pending_proposals' | sh `, sp.String()),
+		fmt.Sprintf(` echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" 'https://api.evergreen.filecoin.io/pending_proposals' | sh `, spID),
 	}, "\n")
 
 	// log.Info("authed")
@@ -65,7 +61,7 @@ func apiListEligible(c echo.Context) error {
 	if c.Request().URL.Path == "/eligible_pieces/sp_local" {
 
 		info = strings.Join([]string{
-			fmt.Sprintf(`List of qualifying Piece CIDs currently available within SPS %s itself`, sp.String()),
+			fmt.Sprintf(`List of qualifying Piece CIDs currently available within SPS %s itself`, spID),
 			``,
 			`This list is ordered by most recently expiring/expired first, and reflects all pieces of data`,
 			`that are still present within your own SP. It is recommended you perform these renewals first,`,
@@ -150,7 +146,7 @@ func apiListEligible(c echo.Context) error {
 					)
 				)
 			`,
-			sp.String(),
+			spID,
 		)
 	} else {
 		info = strings.Join([]string{
@@ -176,7 +172,7 @@ func apiListEligible(c echo.Context) error {
 					max_program_replicas()
 				FROM providers
 			WHERE provider_id = $1`,
-			sp.String(),
+			spID,
 		).Scan(&spOrgID, &spCity, &spCountry, &spContinent, &maxPerOrg, &maxPerCity, &maxPerCountry, &maxPerContinent, &programMax)
 		if err != nil {
 			return err
@@ -228,7 +224,7 @@ func apiListEligible(c echo.Context) error {
 						pd.provider_id = $1
 				)
 			`,
-			sp.String(),
+			spID,
 		)
 	}
 	if err != nil {
@@ -292,7 +288,7 @@ func apiListEligible(c echo.Context) error {
 			p.PayloadCids = append(p.PayloadCids, rNormalized)
 			p.SampleRequestCmd = fmt.Sprintf(
 				`echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" https://api.evergreen.filecoin.io/request_piece/%s | sh`,
-				sp.String(),
+				spID,
 				p.PieceCid,
 			)
 			pieces[p.PieceCid] = &p

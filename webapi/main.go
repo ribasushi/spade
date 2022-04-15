@@ -76,7 +76,7 @@ func main() {
 var logCfg = fmt.Sprintf("{%s}\n", strings.Join([]string{
 	`"time":"${time_custom}"`,
 	`"requuid":"${header:X-REQUEST-UUID}"`,
-	`"sp":"${header:X-AUTHED-SP}"`,
+	`"sp":"${header:X-LOGGED-SP}"`,
 	`"remote_ip":"${remote_ip}"`,
 	`"user_agent":"${user_agent}"`,
 	`"bytes_in":${bytes_in}`,

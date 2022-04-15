@@ -8,18 +8,12 @@ import (
 
 	"github.com/filecoin-project/evergreen-dealer/common"
 	"github.com/filecoin-project/evergreen-dealer/webapi/types"
-	filaddr "github.com/filecoin-project/go-address"
 	"github.com/labstack/echo/v4"
 )
 
 func apiListPendingProposals(c echo.Context) error {
-
-	sp, err := filaddr.NewFromString(c.Response().Header().Get("X-FIL-SPID"))
-	if err != nil {
-		return err
-	}
-
 	ctx := c.Request().Context()
+	spID := c.Response().Header().Get("X-FIL-SPID")
 
 	r := types.ResponsePendingProposals{
 		PendingProposals: make([]types.DealProposal, 0, 128),
@@ -27,7 +21,7 @@ func apiListPendingProposals(c echo.Context) error {
 
 	var isActive bool
 	var customMaxOutstandingGiB *int64
-	err = common.Db.QueryRow(
+	err := common.Db.QueryRow(
 		ctx,
 		`
 		SELECT
@@ -51,7 +45,7 @@ func apiListPendingProposals(c echo.Context) error {
 
 			( SELECT (meta->>'max_outstanding_GiB')::INTEGER FROM providers WHERE provider_id = $1 ) AS max_outstanding_gib
 		`,
-		sp.String(),
+		spID,
 	).Scan(&isActive, &r.CurOutstandingBytes, &customMaxOutstandingGiB)
 	if err != nil {
 		return err
@@ -85,7 +79,7 @@ func apiListPendingProposals(c echo.Context) error {
 				AND
 			pr.activated_deal_id is NULL
 		`,
-		sp.String(),
+		spID,
 	)
 	if err != nil {
 		return err
@@ -149,7 +143,7 @@ func apiListPendingProposals(c echo.Context) error {
 	})
 
 	msg := strings.Join([]string{
-		"This is an overview of deals recently proposed to SP " + sp.String(),
+		"This is an overview of deals recently proposed to SP " + spID,
 		fmt.Sprintf(
 			"There currently are %d proposals to send out, and %d successful proposals totalling %0.2f GiB awaiting sealing.",
 			countPendingProposals,

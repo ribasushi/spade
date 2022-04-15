@@ -20,8 +20,8 @@ import (
 )
 
 func apiRequestPiece(c echo.Context) (defErr error) {
-
 	ctx := c.Request().Context()
+	spID := c.Response().Header().Get("X-FIL-SPID")
 
 	pcidStr := c.Param("pieceCID")
 	pCid, err := cid.Parse(pcidStr)
@@ -29,16 +29,11 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		return retFail(c, "", "Requested piece cid '%s' is not valid: %s", pcidStr, err)
 	}
 
-	sp, err := filaddr.NewFromString(c.Response().Header().Get("X-FIL-SPID"))
-	if err != nil {
-		return err
-	}
-
-	internalReason, err := spIneligibleReason(ctx, sp)
+	internalReason, err := spIneligibleReason(ctx, spID)
 	if err != nil {
 		return err
 	} else if internalReason != "" {
-		return retFail(c, internalReason, ineligibleSpMsg(sp))
+		return retFail(c, internalReason, ineligibleSpMsg(spID))
 	}
 
 	cn := types.ReplicaCounts{MaxSp: 1}
@@ -224,7 +219,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 			max_per_continent()
 		`,
 		pcidStr,
-		sp.String(),
+		spID,
 	).Scan(
 		&isKnownPiece, &paddedPieceSize, &rCidStr,
 		&curOutstandingBytes, &customMaxOutstandingGiB, &customMidnightOffsetMins,
@@ -262,7 +257,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 			403,
 			r,
 			"SPS %s has more deals currently in flight than permitted by the system.\nTry again after you have activated some of your existing proposals.",
-			sp.String(),
+			spID,
 		)
 	}
 
@@ -313,13 +308,18 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		filbig.NewInt(10),
 	)
 
+	spAddr, err := filaddr.NewFromString(spID)
+	if err != nil {
+		return err
+	}
+
 	dp := lotusapi.StartDealParams{
 		DealStartEpoch:    lastMidnightEpoch + common.ProposalStartDelayFromMidnight,
 		MinBlocksDuration: common.ProposalDuration,
 		FastRetrieval:     true,
 		VerifiedDeal:      true,
 		Wallet:            common.EgWallet,
-		Miner:             sp,
+		Miner:             spAddr,
 		EpochPrice:        filbig.Zero(),
 		ProviderCollateral: filbig.Div(
 			filbig.Mul(inflatedCollateralGiB, filbig.NewInt(*paddedPieceSize)),
@@ -345,7 +345,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 			( provider_id, client_id, piece_cid, dealstart_payload )
 		VALUES ( $1, $2, $3, $4 )
 		`,
-		sp.String(),
+		spID,
 		common.EgWallet.String(),
 		pcidStr,
 		dpJ,
@@ -377,7 +377,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 			fmt.Sprintf("Deal queued for pcid %s", pcidStr),
 			``,
 			`In about 5 minutes check the pending list:`,
-			fmt.Sprintf(` echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" 'https://api.evergreen.filecoin.io/pending_proposals' | sh `, sp.String()),
+			fmt.Sprintf(` echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" 'https://api.evergreen.filecoin.io/pending_proposals' | sh `, spID),
 		}, "\n"),
 	)
 }

@@ -141,7 +141,7 @@ var providerEligibleCache, _ = ristretto.NewCache(&ristretto.Config{
 	Cost:    func(interface{}) int64 { return 1 },
 })
 
-func ineligibleSpMsg(sp filaddr.Address) string {
+func ineligibleSpMsg(spID string) string {
 	return fmt.Sprintf(
 		`
 At the time of this request Storage provider %s is not eligible to participate in the program
@@ -157,11 +157,11 @@ If the problem persists, or you believe this is a spurious error: please contact
 administrators in #slingshot-evergreen over at the Filecoin Slack https://filecoin.io/slack
 ( direct link: https://filecoinproject.slack.com/archives/C0377FJCG1L )
 `,
-		sp.String(),
+		spID,
 	)
 }
 
-func spIneligibleReason(ctx context.Context, sp filaddr.Address) (defIneligibleReason string, defErr error) {
+func spIneligibleReason(ctx context.Context, spID string) (defIneligibleReason string, defErr error) {
 
 	// do not cache chain-independent factors
 	var ignoreChainEligibility bool
@@ -174,7 +174,7 @@ func spIneligibleReason(ctx context.Context, sp filaddr.Address) (defIneligibleR
 				AND
 			provider_id = $1
 		`,
-		sp.String(),
+		spID,
 	).Scan(&ignoreChainEligibility)
 	if err == pgx.ErrNoRows {
 		return "provider not marked active", nil
@@ -186,14 +186,14 @@ func spIneligibleReason(ctx context.Context, sp filaddr.Address) (defIneligibleR
 
 	defer func() {
 		if defErr != nil {
-			providerEligibleCache.Del(sp.String())
+			providerEligibleCache.Del(spID)
 			defIneligibleReason = ""
 		} else {
-			providerEligibleCache.SetWithTTL(sp.String(), defIneligibleReason, 1, time.Minute)
+			providerEligibleCache.SetWithTTL(spID, defIneligibleReason, 1, time.Minute)
 		}
 	}()
 
-	if protoReason, found := providerEligibleCache.Get(sp.String()); found {
+	if protoReason, found := providerEligibleCache.Get(spID); found {
 		return protoReason.(string), nil
 	}
 
@@ -202,7 +202,11 @@ func spIneligibleReason(ctx context.Context, sp filaddr.Address) (defIneligibleR
 		return "", err
 	}
 
-	mbi, err := common.LotusAPI.MinerGetBaseInfo(ctx, sp, curTipset.Height(), curTipset.Key())
+	spAddr, err := filaddr.NewFromString(spID)
+	if err != nil {
+		return "", err
+	}
+	mbi, err := common.LotusAPI.MinerGetBaseInfo(ctx, spAddr, curTipset.Height(), curTipset.Key())
 	if err != nil {
 		return "", err
 	}
