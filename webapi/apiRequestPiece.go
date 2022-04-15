@@ -103,7 +103,14 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 
 		SELECT
 
-			EXISTS( SELECT 42 FROM pieces WHERE piece_cid = $1 ) AS valid_piece,
+			EXISTS(
+				SELECT 42
+					FROM pieces
+				WHERE
+					piece_cid = $1
+						AND
+					NOT COALESCE( (meta->'inactive')::BOOL, false )
+			) AS valid_piece,
 
 			( SELECT padded_size FROM pieces WHERE piece_cid = $1 ) AS padded_size,
 			( SELECT payload_cid FROM payloads WHERE piece_cid = $1 ) AS payload_cid,
@@ -113,6 +120,8 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 					FROM pieces p
 					JOIN proposals pr USING ( piece_cid )
 				WHERE
+					NOT COALESCE( (p.meta->'inactive')::BOOL, false )
+						AND
 					pr.proposal_failstamp = 0
 						AND
 					pr.activated_deal_id IS NULL

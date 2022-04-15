@@ -35,6 +35,8 @@ func apiListPendingProposals(c echo.Context) error {
 						FROM pieces p
 						JOIN proposals pr USING ( piece_cid )
 					WHERE
+						NOT COALESCE( (p.meta->'inactive')::BOOL, false )
+							AND
 						pr.proposal_failstamp = 0
 							AND
 						pr.activated_deal_id IS NULL
@@ -90,6 +92,8 @@ func apiListPendingProposals(c echo.Context) error {
 					JOIN pieces p USING ( piece_cid )
 					JOIN payloads pl USING ( piece_cid )
 				WHERE
+					NOT COALESCE( (p.meta->'inactive')::BOOL, false )
+						AND
 					pr.provider_id = $1
 						AND
 					( pr.start_by - NOW() ) > '1 hour'::INTERVAL

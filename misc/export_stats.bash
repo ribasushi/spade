@@ -45,6 +45,8 @@ ex_qap() {
           FROM proposals pr
           JOIN pieces p USING ( piece_cid )
         WHERE
+          NOT COALESCE( (p.meta->'inactive')::BOOL, false )
+            AND
           pr.proposal_success_cid IS NOT NULL
             AND
           pr.proposal_failstamp = 0
@@ -64,6 +66,8 @@ ex_qap() {
           JOIN pieces p USING( piece_cid )
           JOIN clients c USING ( client_id )
         WHERE
+          NOT COALESCE( (p.meta->'inactive')::BOOL, false )
+            AND
           pd.status = 'active'
             AND
           c.is_affiliated
@@ -83,7 +87,8 @@ ex_qap() {
             FROM published_deals pd
             JOIN clients c
               ON c.client_id = pd.client_id AND c.is_affiliated AND pd.status = 'active'
-            JOIN pieces p USING( piece_cid )
+            JOIN pieces p
+              ON p.piece_cid = pd.piece_cid AND NOT COALESCE( (p.meta->'inactive')::BOOL, false )
             RIGHT JOIN providers pr USING ( provider_id )
           WHERE
             pr.org_id != ''

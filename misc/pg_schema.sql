@@ -228,6 +228,8 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
         FROM evergreen.pieces pi
         LEFT JOIN datasets ds USING ( dataset_id )
       WHERE
+        NOT COALESCE( (pi.meta->'inactive')::BOOL, false )
+          AND
         -- there needs to be at least one active deal ( anywhere )
         EXISTS (
           SELECT 42
@@ -245,8 +247,6 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
             JOIN evergreen.clients c USING ( client_id )
           WHERE
             d1.piece_cid = pi.piece_cid
-              AND
-            c.is_affiliated
               AND
             d1.is_filplus
               AND
@@ -561,6 +561,7 @@ CREATE MATERIALIZED VIEW replica_counts AS (
       ) agg
     ) AS pending
   FROM pieces curpiece
+  WHERE NOT COALESCE( (meta->'inactive')::BOOL, false )
 );
 CREATE UNIQUE INDEX replica_counts_piece_cid ON evergreen.replica_counts ( piece_cid );
 ANALYZE evergreen.replica_counts;
@@ -592,6 +593,8 @@ CREATE VIEW frontpage_stats_v0 AS (
         JOIN published_deals pd USING ( piece_cid )
         JOIN clients c USING ( client_id )
       WHERE
+        NOT COALESCE( (p.meta->'inactive')::BOOL, false )
+          AND
         pd.status = 'active'
           AND
         c.is_affiliated
@@ -602,7 +605,9 @@ CREATE VIEW frontpage_stats_v0 AS (
           COUNT(*) AS unique_deals_count
         FROM pieces p
       WHERE
-        piece_cid IN (
+        NOT COALESCE( (p.meta->'inactive')::BOOL, false )
+          AND
+        p.piece_cid IN (
           SELECT piece_cid
             FROM published_deals pd
             JOIN clients c USING ( client_id )
