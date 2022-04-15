@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS evergreen.published_deals (
   client_id TEXT NOT NULL REFERENCES evergreen.clients ( client_id ),
   label BYTEA NOT NULL,
   decoded_label TEXT CONSTRAINT valid_cid CHECK ( evergreen.valid_cid_v1( decoded_label ) ),
-  is_fil_plus BOOL NOT NULL,
+  is_filplus BOOL NOT NULL,
   status TEXT NOT NULL,
   status_meta TEXT,
   start_epoch INTEGER NOT NULL CONSTRAINT valid_start CHECK ( start_epoch > 0 ),
@@ -176,7 +176,7 @@ CREATE TRIGGER trigger_create_related_actors
 CREATE INDEX IF NOT EXISTS published_deals_piece_cid ON evergreen.published_deals ( piece_cid );
 CREATE INDEX IF NOT EXISTS published_deals_client ON evergreen.published_deals ( client_id );
 CREATE INDEX IF NOT EXISTS published_deals_provider ON evergreen.published_deals ( provider_id );
-CREATE INDEX IF NOT EXISTS published_deals_status ON evergreen.published_deals ( status, is_fil_plus, piece_cid );
+CREATE INDEX IF NOT EXISTS published_deals_status ON evergreen.published_deals ( status, is_filplus, piece_cid );
 CREATE INDEX IF NOT EXISTS published_deals_sector_started ON evergreen.published_deals ( sector_start_epoch );
 
 
@@ -248,7 +248,7 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
               AND
             c.is_affiliated
               AND
-            d1.is_fil_plus
+            d1.is_filplus
               AND
             d1.status = 'active'
               AND
@@ -268,12 +268,12 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
           d.status,
           d.provider_id,
           c.client_address,
-          d.is_fil_plus,
+          d.is_filplus,
           d.start_epoch,
           d.start_time,
           d.end_epoch,
           d.end_time,
-          ( RANK() OVER ( PARTITION BY pfr.piece_cid, d.provider_id ORDER BY d.is_fil_plus DESC, d.end_time DESC, d.deal_id ) ) AS sp_best_deal_rank
+          ( RANK() OVER ( PARTITION BY pfr.piece_cid, d.provider_id ORDER BY d.is_filplus DESC, d.end_time DESC, d.deal_id ) ) AS sp_best_deal_rank
         FROM pieces_for_refresh pfr
         JOIN evergreen.payloads pl USING ( piece_cid )
         JOIN evergreen.published_deals d USING ( piece_cid )
@@ -294,7 +294,7 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
       d.end_epoch,
       d.end_time,
       d.client_address,
-      d.is_fil_plus,
+      d.is_filplus,
       d.provider_id,
       pr.org_id,
       pr.city,
@@ -310,7 +310,7 @@ CREATE INDEX deallist_eligible_original_payload_cid ON evergreen.deallist_eligib
 CREATE INDEX deallist_eligible_normalized_payload_cid ON evergreen.deallist_eligible ( normalized_payload_cid );
 CREATE INDEX deallist_eligible_padded_size ON evergreen.deallist_eligible ( padded_size );
 CREATE INDEX deallist_eligible_provider_id ON evergreen.deallist_eligible ( provider_id );
-CREATE INDEX deallist_eligible_is_fil_plus ON evergreen.deallist_eligible ( is_fil_plus );
+CREATE INDEX deallist_eligible_is_filplus ON evergreen.deallist_eligible ( is_filplus );
 CREATE INDEX deallist_eligible_start_time ON evergreen.deallist_eligible ( start_time );
 CREATE INDEX deallist_eligible_end_time ON evergreen.deallist_eligible ( end_time );
 CREATE INDEX deallist_eligible_org_id ON evergreen.deallist_eligible ( org_id );
@@ -574,7 +574,7 @@ CREATE VIEW deallist_v0 AS (
     original_payload_cid AS payload_cid,
     provider_id,
     client_address,
-    is_fil_plus,
+    is_filplus,
     start_epoch,
     start_time,
     end_epoch,

@@ -260,7 +260,7 @@ var trackDeals = &cli.Command{
 				ctx,
 				`
 				INSERT INTO published_deals
-					( deal_id, client_id, provider_id, piece_cid, label, decoded_label, is_fil_plus, status, status_meta, start_epoch, end_epoch, sector_start_epoch, termination_detection_time )
+					( deal_id, client_id, provider_id, piece_cid, label, decoded_label, is_filplus, status, status_meta, start_epoch, end_epoch, sector_start_epoch, termination_detection_time )
 					VALUES ( $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13 )
 				ON CONFLICT ( deal_id ) DO UPDATE SET
 					status = EXCLUDED.status,

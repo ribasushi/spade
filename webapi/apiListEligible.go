@@ -89,7 +89,7 @@ func apiListEligible(c echo.Context) error {
 					d.original_payload_cid,
 					d.normalized_payload_cid,
 					d.provider_id,
-					d.is_fil_plus,
+					d.is_filplus,
 					d.end_time,
 					NULL,
 					NULL
@@ -193,7 +193,7 @@ func apiListEligible(c echo.Context) error {
 					d.original_payload_cid,
 					d.normalized_payload_cid,
 					d.provider_id,
-					d.is_fil_plus,
+					d.is_filplus,
 					d.end_time,
 					rc.active AS counts_replicas,
 					rc.pending AS counts_pending
