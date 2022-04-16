@@ -106,18 +106,23 @@ func apiListPendingProposals(c echo.Context) error {
 				SELECT JSONB_AGG(JSONB_STRIP_NULLS(s)) FROM (
 					SELECT
 						JSONB_BUILD_OBJECT(
-							'provider_id', de.provider_id,
-							'deal_id', de.deal_id,
-							'original_payload_cid', de.original_payload_cid,
-							'deal_expiration', de.end_time,
-							'is_filplus', de.is_filplus
+							'provider_id', pd.provider_id,
+							'deal_id', pd.deal_id,
+							'original_payload_cid', (
+								CASE WHEN pd.decoded_label = pl.payload_cid THEN CONVERT_FROM(pd.label,'UTF-8') ELSE pl.payload_cid END
+							),
+							'deal_expiration', pd.end_time,
+							'is_filplus', pd.is_filplus
 						) AS s
-						FROM deallist_eligible de
+						FROM published_deals pd
+						JOIN payloads pl USING ( piece_cid )
 					WHERE
-						de.piece_cid = prelist.piece_cid
+						pd.piece_cid = prelist.piece_cid
 							AND
 						NOT prelist.is_published
-					ORDER BY is_filplus DESC, de.end_time DESC
+							AND
+						pd.status = 'active'
+					ORDER BY pd.is_filplus DESC, pd.end_time DESC
 				) subq
 			) AS sources
 		FROM prelist
