@@ -12,7 +12,6 @@ import (
 	"github.com/filecoin-project/evergreen-dealer/webapi/types"
 	"github.com/jackc/pgx/v4"
 	"github.com/labstack/echo/v4"
-	"golang.org/x/xerrors"
 )
 
 func apiListEligible(c echo.Context) error {
@@ -267,7 +266,7 @@ func apiListEligible(c echo.Context) error {
 		}
 
 		if prevDealID, seen := seenPieceSpCombo[pieceSpCombo{pcid: p.PieceCid, spid: s.ProviderID}]; seen {
-			return xerrors.Errorf("Unexpected double-deal for same sp/pcid: %d and %d", prevDealID, s.DealID)
+			return fmt.Errorf("Unexpected double-deal for same sp/pcid: %d and %d", prevDealID, s.DealID)
 		}
 		seenPieceSpCombo[pieceSpCombo{pcid: p.PieceCid, spid: s.ProviderID}] = s.DealID
 

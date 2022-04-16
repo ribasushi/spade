@@ -6,24 +6,23 @@ require (
 	github.com/dgraph-io/ristretto v0.1.0
 	github.com/dustin/go-humanize v1.0.0
 	github.com/filecoin-project/go-address v0.0.6
-	github.com/filecoin-project/go-fil-markets v1.20.1
+	github.com/filecoin-project/go-fil-markets v1.20.3
 	github.com/filecoin-project/go-jsonrpc v0.1.5
 	github.com/filecoin-project/go-state-types v0.1.3
-	github.com/filecoin-project/lotus v1.15.0
+	github.com/filecoin-project/lotus v1.15.1
 	github.com/filecoin-project/specs-actors v0.9.14
 	github.com/hashicorp/golang-lru v0.5.4
 	github.com/ipfs/go-cid v0.1.0
 	github.com/ipfs/go-fs-lock v0.0.7
-	github.com/ipfs/go-log/v2 v2.5.0
+	github.com/ipfs/go-log/v2 v2.5.1
 	github.com/jackc/pgx/v4 v4.15.0
 	github.com/labstack/echo/v4 v4.7.2
 	github.com/labstack/gommon v0.3.1
 	github.com/mattn/go-isatty v0.0.14
 	github.com/prometheus/client_golang v1.12.1
 	github.com/urfave/cli/v2 v2.4.0
-	golang.org/x/net v0.0.0-20220325170049-de3da57026de
-	golang.org/x/sys v0.0.0-20220330033206-e17cdc41300f
-	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1
+	golang.org/x/net v0.0.0-20220412020605-290c469a71a5
+	golang.org/x/sys v0.0.0-20220412211240-33da011f77ad
 )
 
 require (
@@ -45,7 +44,7 @@ require (
 	github.com/filecoin-project/go-amt-ipld/v4 v4.0.0 // indirect
 	github.com/filecoin-project/go-bitfield v0.2.4 // indirect
 	github.com/filecoin-project/go-cbor-util v0.0.1 // indirect
-	github.com/filecoin-project/go-data-transfer v1.14.1 // indirect
+	github.com/filecoin-project/go-data-transfer v1.15.1 // indirect
 	github.com/filecoin-project/go-hamt-ipld v0.1.5 // indirect
 	github.com/filecoin-project/go-hamt-ipld/v2 v2.0.0 // indirect
 	github.com/filecoin-project/go-hamt-ipld/v3 v3.1.0 // indirect
@@ -56,7 +55,8 @@ require (
 	github.com/filecoin-project/specs-actors/v4 v4.0.1 // indirect
 	github.com/filecoin-project/specs-actors/v5 v5.0.4 // indirect
 	github.com/filecoin-project/specs-actors/v6 v6.0.1 // indirect
-	github.com/filecoin-project/specs-actors/v7 v7.0.0-rc1 // indirect
+	github.com/filecoin-project/specs-actors/v7 v7.0.0 // indirect
+	github.com/filecoin-project/specs-actors/v8 v8.0.0-20220407202104-e375a8763a1c // indirect
 	github.com/filecoin-project/specs-storage v0.2.0 // indirect
 	github.com/gbrlsnchs/jwt/v3 v3.0.1 // indirect
 	github.com/go-kit/log v0.2.0 // indirect
@@ -82,7 +82,7 @@ require (
 	github.com/ipfs/go-block-format v0.0.3 // indirect
 	github.com/ipfs/go-blockservice v0.2.1 // indirect
 	github.com/ipfs/go-datastore v0.5.1 // indirect
-	github.com/ipfs/go-graphsync v0.12.0 // indirect
+	github.com/ipfs/go-graphsync v0.13.1 // indirect
 	github.com/ipfs/go-ipfs-blockstore v1.1.2 // indirect
 	github.com/ipfs/go-ipfs-cmds v0.6.0 // indirect
 	github.com/ipfs/go-ipfs-ds-help v1.1.0 // indirect
@@ -100,8 +100,8 @@ require (
 	github.com/ipfs/go-unixfs v0.3.1 // indirect
 	github.com/ipfs/go-verifcid v0.0.1 // indirect
 	github.com/ipfs/interface-go-ipfs-core v0.5.2 // indirect
-	github.com/ipld/go-codec-dagpb v1.3.0 // indirect
-	github.com/ipld/go-ipld-prime v0.14.4 // indirect
+	github.com/ipld/go-codec-dagpb v1.3.2 // indirect
+	github.com/ipld/go-ipld-prime v0.16.0 // indirect
 	github.com/jackc/chunkreader/v2 v2.0.1 // indirect
 	github.com/jackc/pgconn v1.11.0 // indirect
 	github.com/jackc/pgio v1.0.0 // indirect
@@ -169,6 +169,7 @@ require (
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac // indirect
 	golang.org/x/tools v0.1.7 // indirect
+	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/protobuf v1.27.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	lukechampine.com/blake3 v1.1.7 // indirect

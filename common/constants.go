@@ -5,6 +5,7 @@ import (
 	filactor "github.com/filecoin-project/specs-actors/actors/builtin"
 )
 
+//nolint:revive
 const (
 	AppName      = "evergreen-dealer"
 	PromInstance = "dataprogs_evergreen"
@@ -18,4 +19,4 @@ const (
 	ProposalDuration               = 532 * filactor.EpochsInDay
 )
 
-var EgWallet, _ = filaddr.NewFromString("f01787692")
+var EgWallet, _ = filaddr.NewFromString("f01787692") //nolint:revive

@@ -9,11 +9,11 @@ const (
 	cidTrimSuffix = 8
 )
 
-func TrimCidString(cs string) string {
+func TrimCidString(cs string) string { //nolint:revive
 	if len(cs) <= cidTrimPrefix+cidTrimSuffix+2 {
 		return cs
 	}
 	return cs[0:cidTrimPrefix] + "~" + cs[len(cs)-cidTrimSuffix:]
 }
 
-var NonAlphanumRun = regexp.MustCompile(`[^a-zA-Z0-9]+`)
+var NonAlphanumRun = regexp.MustCompile(`[^a-zA-Z0-9]+`) //nolint:revive

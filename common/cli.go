@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var IsTerm = isatty.IsTerminal(os.Stderr.Fd())
+var IsTerm = isatty.IsTerminal(os.Stderr.Fd()) //nolint:revive
 
 // singletons populated on start
 var (
@@ -33,7 +33,7 @@ var (
 	PromPass string
 )
 
-var CliFlags = []cli.Flag{
+var CliFlags = []cli.Flag{ //nolint:revive
 	altsrc.NewStringFlag(&cli.StringFlag{
 		Name:  "lotus-api",
 		Value: "http://localhost:1234",
@@ -75,7 +75,7 @@ var CliFlags = []cli.Flag{
 	}),
 }
 
-func TopContext(onCleanup func()) (context.Context, func()) {
+func TopContext(onCleanup func()) (context.Context, func()) { //nolint:revive
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var o sync.Once
@@ -100,7 +100,7 @@ func TopContext(onCleanup func()) (context.Context, func()) {
 	return ctx, closer
 }
 
-func CliBeforeSetup(cctx *cli.Context) error {
+func CliBeforeSetup(cctx *cli.Context) error { //nolint:revive
 	if err := altsrc.InitInputSourceWithContext(
 		CliFlags,
 		func(context *cli.Context) (altsrc.InputSourceContext, error) {
