@@ -15,9 +15,8 @@ import (
 	filabi "github.com/filecoin-project/go-state-types/abi"
 	"github.com/filecoin-project/go-state-types/crypto"
 	filcrypto "github.com/filecoin-project/go-state-types/crypto"
-	filbuild "github.com/filecoin-project/lotus/build"
-	"github.com/filecoin-project/lotus/chain/types"
-	filtypes "github.com/filecoin-project/lotus/chain/types"
+	lotustypes "github.com/filecoin-project/lotus/chain/types"
+	filprovider "github.com/filecoin-project/specs-actors/actors/builtin/miner"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/labstack/echo/v4"
 )
@@ -163,9 +162,9 @@ func verifySig(c echo.Context, challenge sigChallenge) (verifySigResult, error) 
 
 	ctx := c.Request().Context()
 
-	var be *filtypes.BeaconEntry
+	var be *lotustypes.BeaconEntry
 	if protoBe, didFind := beaconCache.Get(challenge.epoch); didFind {
-		be = protoBe.(*filtypes.BeaconEntry)
+		be = protoBe.(*lotustypes.BeaconEntry)
 	} else {
 		be, err = common.LotusAPI.BeaconGetEntry(ctx, filabi.ChainEpoch(challenge.epoch))
 		if err != nil {
@@ -174,7 +173,7 @@ func verifySig(c echo.Context, challenge sigChallenge) (verifySigResult, error) 
 		beaconCache.Add(challenge.epoch, be)
 	}
 
-	miFinTs, err := common.LotusAPI.ChainGetTipSetByHeight(ctx, filabi.ChainEpoch(challenge.epoch)-filbuild.Finality, types.EmptyTSK)
+	miFinTs, err := common.LotusAPI.ChainGetTipSetByHeight(ctx, filabi.ChainEpoch(challenge.epoch)-filprovider.ChainFinality, lotustypes.EmptyTSK)
 	if err != nil {
 		return verifySigResult{}, err
 	}

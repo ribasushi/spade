@@ -15,7 +15,7 @@ import (
 	filabi "github.com/filecoin-project/go-state-types/abi"
 	filbig "github.com/filecoin-project/go-state-types/big"
 	lotusapi "github.com/filecoin-project/lotus/api"
-	filtypes "github.com/filecoin-project/lotus/chain/types"
+	lotustypes "github.com/filecoin-project/lotus/chain/types"
 	"github.com/ipfs/go-cid"
 	"github.com/labstack/echo/v4"
 )
@@ -305,7 +305,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 	}
 	lastMidnightEpoch := common.WallTimeEpoch(lastMidnight)
 
-	lastMidnightTs, err := common.LotusAPI.ChainGetTipSetByHeight(ctx, lastMidnightEpoch, filtypes.TipSetKey{})
+	lastMidnightTs, err := common.LotusAPI.ChainGetTipSetByHeight(ctx, lastMidnightEpoch, lotustypes.TipSetKey{})
 	if err != nil {
 		return err
 	}

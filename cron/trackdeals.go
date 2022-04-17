@@ -12,8 +12,8 @@ import (
 	filabi "github.com/filecoin-project/go-state-types/abi"
 	filbig "github.com/filecoin-project/go-state-types/big"
 	lotusapi "github.com/filecoin-project/lotus/api"
-	filprovider "github.com/filecoin-project/lotus/chain/actors/builtin/miner"
-	filtypes "github.com/filecoin-project/lotus/chain/types"
+	lotustypes "github.com/filecoin-project/lotus/chain/types"
+	filprovider "github.com/filecoin-project/specs-actors/actors/builtin/miner"
 	"github.com/ipfs/go-cid"
 	"github.com/urfave/cli/v2"
 )
@@ -26,7 +26,7 @@ var trackDeals = &cli.Command{
 
 		ctx := cctx.Context
 
-		var stateTipset *filtypes.TipSet
+		var stateTipset *lotustypes.TipSet
 		var stateDeals map[string]lotusapi.MarketDeal
 		dealQueryDone := make(chan error, 1)
 		go func() {

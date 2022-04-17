@@ -7,19 +7,18 @@ import (
 
 	"github.com/filecoin-project/go-state-types/abi"
 	filabi "github.com/filecoin-project/go-state-types/abi"
-	filbuild "github.com/filecoin-project/lotus/build"
-	filactor "github.com/filecoin-project/lotus/chain/actors/builtin"
-	filtypes "github.com/filecoin-project/lotus/chain/types"
+	lotusbuild "github.com/filecoin-project/lotus/build"
+	lotustypes "github.com/filecoin-project/lotus/chain/types"
 	filactors "github.com/filecoin-project/specs-actors/actors/builtin"
 )
 
 func MainnetTime(e filabi.ChainEpoch) time.Time { return time.Unix(int64(e)*30+FilGenesisUnix, 0) } //nolint:revive
 
 func WallTimeEpoch(t time.Time) filabi.ChainEpoch { //nolint:revive
-	return abi.ChainEpoch(t.Unix()-FilGenesisUnix) / filactor.EpochDurationSeconds
+	return abi.ChainEpoch(t.Unix()-FilGenesisUnix) / filactors.EpochDurationSeconds
 }
 
-func LotusLookbackTipset(ctx context.Context) (*filtypes.TipSet, error) { //nolint:revive
+func LotusLookbackTipset(ctx context.Context) (*lotustypes.TipSet, error) { //nolint:revive
 	latestHead, err := LotusAPI.ChainHead(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed getting chain head: %w", err)
@@ -30,7 +29,7 @@ func LotusLookbackTipset(ctx context.Context) (*filtypes.TipSet, error) { //noli
 
 	if wallUnix < filUnix ||
 		wallUnix > filUnix+int64(
-			filbuild.PropagationDelaySecs+(ApiMaxTipsetsBehind*filactors.EpochDurationSeconds),
+			lotusbuild.PropagationDelaySecs+(ApiMaxTipsetsBehind*filactors.EpochDurationSeconds),
 		) {
 		return nil, fmt.Errorf(
 			"lotus API out of sync: chainHead reports unixtime %d (height: %d) while walltime is %d (delta: %s)",
