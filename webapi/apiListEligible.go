@@ -349,10 +349,10 @@ func apiListEligible(c echo.Context) error {
 
 	if uint64(len(ret)) > lim {
 		info = strings.Join([]string{
-			info,
-			``,
 			fmt.Sprintf(`NOTE: The complete list of %d entries has been TRUNCATED to the top %d.`, len(ret), lim),
 			fmt.Sprintf(`You can add the ...?limit=%d parameter to your call to see the full (possibly very large) list.`, len(ret)),
+			``,
+			info,
 		}, "\n")
 		ret = ret[:lim]
 	}
