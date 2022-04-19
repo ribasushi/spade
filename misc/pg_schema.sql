@@ -194,12 +194,11 @@ CREATE TABLE IF NOT EXISTS evergreen.proposals (
   client_id TEXT NOT NULL REFERENCES evergreen.clients ( client_id ),
 
   dealstart_payload JSONB,
-  start_by TIMESTAMP WITH TIME ZONE GENERATED ALWAYS AS ( evergreen.ts_from_epoch( (dealstart_payload->>'DealStartEpoch')::INTEGER ) ) STORED,
 
   proposal_success_cid TEXT UNIQUE CONSTRAINT valid_proposal_cid CHECK ( evergreen.valid_cid_v1(proposal_success_cid) ),
   proposal_failstamp BIGINT NOT NULL DEFAULT 0 CONSTRAINT valid_failstamp CHECK ( proposal_failstamp >= 0 ),
 
-  activated_deal_id BIGINT REFERENCES evergreen.published_deals ( deal_id ),
+  activated_deal_id BIGINT UNIQUE REFERENCES evergreen.published_deals ( deal_id ),
   meta JSONB,
 
   entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),

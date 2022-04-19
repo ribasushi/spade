@@ -13,7 +13,7 @@ import (
 	filbig "github.com/filecoin-project/go-state-types/big"
 	lotusapi "github.com/filecoin-project/lotus/api"
 	lotustypes "github.com/filecoin-project/lotus/chain/types"
-	filprovider "github.com/filecoin-project/specs-actors/actors/builtin/miner"
+	filmarket "github.com/filecoin-project/specs-actors/actors/builtin/market"
 	"github.com/ipfs/go-cid"
 	"github.com/urfave/cli/v2"
 )
@@ -216,8 +216,8 @@ var trackDeals = &cli.Command{
 					d.State.SectorStartEpoch,
 				)
 				statusMeta = &m
-			} else if d.Proposal.StartEpoch+filprovider.WPoStChallengeWindow < stateTipset.Height() {
-				// if things are lookback+one deadlines late: they are never going to make it
+			} else if d.Proposal.StartEpoch+filmarket.DealUpdatesInterval < stateTipset.Height() {
+				// if things are that late: they are never going to make it
 				status = "terminated"
 
 				m := fmt.Sprintf(
@@ -239,10 +239,8 @@ var trackDeals = &cli.Command{
 				}
 			}
 
-			if d.Proposal.VerifiedDeal && status == "published" {
-				if dcap, isAc := affiliatedClientDatacap[clientLookup[d.Proposal.Client]]; isAc {
-					filbig.Add(*dcap, filbig.NewInt(int64(d.Proposal.PieceSize)))
-				}
+			if dcap, isAc := affiliatedClientDatacap[clientLookup[d.Proposal.Client]]; isAc && status == "published" {
+				filbig.Add(*dcap, filbig.NewInt(int64(d.Proposal.PieceSize)))
 			}
 
 			// at this point if the status hasn't changed - there is nothing to UPSERT
@@ -393,15 +391,16 @@ var trackDeals = &cli.Command{
 				meta = JSONB_SET(
 					COALESCE( meta, '{}' ),
 					'{ failure }',
-					TO_JSONB( 'proposal DealStartEpoch ' || (dealstart_payload ->> 'DealStartEpoch') || ' reached at ' || NOW() || ' without activation' )
+					TO_JSONB( 'proposal DealStartEpoch ' || (dealstart_payload ->> 'DealStartEpoch') || ' missed at ' || NOW() || ' without activation' )
 				)
 			WHERE
 				proposal_failstamp = 0
 					AND
 				activated_deal_id IS NULL
 					AND
-				start_by < NOW()
+				(dealstart_payload -> 'DealStartEpoch')::BIGINT < $1
 			`,
+			stateTipset.Height()-filmarket.DealUpdatesInterval,
 		); err != nil {
 			return err
 		}

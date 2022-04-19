@@ -9,6 +9,8 @@ import (
 
 	"github.com/filecoin-project/evergreen-dealer/common"
 	"github.com/filecoin-project/evergreen-dealer/webapi/types"
+	filabi "github.com/filecoin-project/go-state-types/abi"
+	filactor "github.com/filecoin-project/specs-actors/actors/builtin"
 	"github.com/labstack/echo/v4"
 )
 
@@ -69,7 +71,6 @@ func apiListPendingProposals(c echo.Context) error {
 						pr.proposal_success_cid,
 						pr.proposal_failstamp,
 						pr.meta->>'failure',
-						pr.start_by,
 						(pr.dealstart_payload->'DealStartEpoch')::BIGINT AS start_epoch,
 						p.piece_cid,
 						p.padded_size,
@@ -96,7 +97,7 @@ func apiListPendingProposals(c echo.Context) error {
 						AND
 					pr.provider_id = $1
 						AND
-					( pr.start_by - NOW() ) > '1 hour'::INTERVAL
+					(pr.dealstart_payload->'DealStartEpoch')::BIGINT > $2
 						AND
 					pr.activated_deal_id is NULL
 			)
@@ -128,6 +129,7 @@ func apiListPendingProposals(c echo.Context) error {
 		FROM prelist
 		`,
 		spID,
+		common.WallTimeEpoch(time.Now())+filactor.EpochsInHour,
 	)
 	if err != nil {
 		return err
@@ -141,7 +143,7 @@ func apiListPendingProposals(c echo.Context) error {
 		var dCid, failure, sourcesJSON *string
 		var failstamp int64
 		var isPublished bool
-		if err = rows.Scan(&dCid, &failstamp, &failure, &prop.StartTime, &prop.StartEpoch, &prop.PieceCid, &prop.PieceSize, &prop.RootCid, &isPublished, &sourcesJSON); err != nil {
+		if err = rows.Scan(&dCid, &failstamp, &failure, &prop.StartEpoch, &prop.PieceCid, &prop.PieceSize, &prop.RootCid, &isPublished, &sourcesJSON); err != nil {
 			return err
 		}
 
@@ -166,6 +168,7 @@ func apiListPendingProposals(c echo.Context) error {
 			countPublishedDeals++
 		} else {
 			prop.DealCid = *dCid
+			prop.StartTime = common.MainnetTime(filabi.ChainEpoch(prop.StartEpoch))
 			prop.HoursRemaining = int(time.Until(prop.StartTime).Truncate(time.Hour).Hours())
 			prop.ImportCMD = fmt.Sprintf("lotus-miner storage-deals import-data %s %s__%s.car",
 				*dCid,
