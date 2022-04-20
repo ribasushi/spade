@@ -215,6 +215,31 @@ CREATE INDEX IF NOT EXISTS proposals_client_idx ON evergreen.proposals ( client_
 CREATE INDEX IF NOT EXISTS proposals_provider_idx ON evergreen.proposals ( provider_id );
 CREATE INDEX IF NOT EXISTS proposals_piece_idx ON evergreen.proposals ( piece_cid );
 
+CREATE OR REPLACE VIEW evergreen.clients_datacap_available AS
+  SELECT
+    c.client_id,
+    (
+      c.activateable_datacap
+        -
+      COALESCE(
+        (
+        SELECT SUM( (dealstart_payload->'Data'->'PieceSize')::BIGINT / 127 * 128)
+          FROM proposals p
+        WHERE
+          p.proposal_failstamp = 0
+            AND
+          p.activated_deal_id IS NULL
+            AND
+          p.client_id = c.client_id
+        ),
+        0
+      )
+    ) AS datacap_available
+  FROM clients c
+  WHERE c.is_affiliated
+  ORDER BY datacap_available
+;
+
 BEGIN;
 DROP VIEW IF EXISTS frontpage_stats_v0;
 DROP VIEW IF EXISTS deallist_v0;

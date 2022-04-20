@@ -1,7 +1,6 @@
 package common
 
 import (
-	filaddr "github.com/filecoin-project/go-address"
 	filactor "github.com/filecoin-project/specs-actors/actors/builtin"
 )
 
@@ -18,5 +17,3 @@ const (
 	ProposalStartDelayFromMidnight = (72 + 16) * filactor.EpochsInHour
 	ProposalDuration               = 532 * filactor.EpochsInDay
 )
-
-var EgWallet, _ = filaddr.NewFromString("f01787692") //nolint:revive
