@@ -1,4 +1,4 @@
-module github.com/filecoin-project/evergreen-dealer
+module github.com/robquistnl/evergreen-dealer
 
 go 1.17
 
