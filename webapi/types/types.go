@@ -84,7 +84,7 @@ type Piece struct { //nolint:revive
 	Dataset          *string      `json:"dataset"`
 	PaddedPieceSize  uint64       `json:"padded_piece_size"`
 	PayloadCids      []string     `json:"payload_cids"`
-	Sources          []DataSource `json:"sources"`
+	Sources          []FilSource  `json:"sources"`
 	SampleRequestCmd string       `json:"sample_request_cmd"`
 }
 
