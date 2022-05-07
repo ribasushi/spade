@@ -98,27 +98,7 @@ func apiListEligible(c echo.Context) error {
 
 					AND
 
-				d.padded_size <= $2
-
-					AND
-
 				d.end_time < expiration_cutoff()
-
-					AND
-
-				-- I do not hold a better deal
-				NOT EXISTS (
-					SELECT 42
-						FROM published_deals pd
-					WHERE
-						pd.piece_cid = d.piece_cid
-							AND
-						pd.provider_id = $1
-							AND
-						pd.status != 'terminated'
-							AND
-						pd.end_time > d.end_time
-				)
 
 					AND
 
@@ -153,7 +133,6 @@ func apiListEligible(c echo.Context) error {
 				)
 			`,
 			spID,
-			spSize,
 		)
 	} else {
 		info = strings.Join([]string{

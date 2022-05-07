@@ -93,8 +93,6 @@ func apiListPendingProposals(c echo.Context) error {
 					JOIN pieces p USING ( piece_cid )
 					JOIN payloads pl USING ( piece_cid )
 				WHERE
-					NOT COALESCE( (p.meta->'inactive')::BOOL, false )
-						AND
 					pr.provider_id = $1
 						AND
 					(pr.dealstart_payload->'DealStartEpoch')::BIGINT > $2
