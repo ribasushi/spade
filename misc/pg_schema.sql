@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS evergreen.published_deals (
   decoded_label TEXT CONSTRAINT valid_label_cid CHECK ( evergreen.valid_cid( decoded_label ) ),
   is_filplus BOOL NOT NULL,
   status TEXT NOT NULL,
-  status_meta TEXT,
+  meta JSONB,
   start_epoch INTEGER NOT NULL CONSTRAINT valid_start CHECK ( start_epoch > 0 ),
   start_time TIMESTAMP WITH TIME ZONE NOT NULL GENERATED ALWAYS AS ( evergreen.ts_from_epoch( start_epoch ) ) STORED,
   end_epoch INTEGER NOT NULL CONSTRAINT valid_end CHECK ( end_epoch > 0 ),
@@ -270,6 +270,8 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
             d0.piece_cid = pi.piece_cid
               AND
             d0.status = 'active'
+              AND
+            NOT COALESCE( (d0.meta->'inactive')::BOOL, false )
         )
           AND
         -- fewer than program-allowed total not-yet-expiring replicas ( not counting our proposals )
@@ -283,6 +285,8 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
             d1.is_filplus
               AND
             d1.status = 'active'
+              AND
+            NOT COALESCE( (d1.meta->'inactive')::BOOL, false )
               AND
             d1.end_time > expiration_cutoff()
         )
@@ -312,6 +316,8 @@ CREATE MATERIALIZED VIEW deallist_eligible AS (
         JOIN evergreen.clients c USING ( client_id )
       WHERE
         d.status = 'active'
+          AND
+        NOT COALESCE( (d.meta->'inactive')::BOOL, false )
     )
   SELECT
       d.deal_id,
@@ -387,6 +393,8 @@ CREATE MATERIALIZED VIEW replica_counts AS (
                   AND
                 d.status = 'active'
                   AND
+                NOT COALESCE( (d.meta->'inactive')::BOOL, false )
+                  AND
                 c.is_affiliated
             ) AS v
           ) sagg ) AS v
@@ -407,6 +415,8 @@ CREATE MATERIALIZED VIEW replica_counts AS (
                   d.end_time > expiration_cutoff()
                     AND
                   d.status = 'active'
+                    AND
+                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
                     AND
                   c.is_affiliated
                     AND
@@ -432,6 +442,8 @@ CREATE MATERIALIZED VIEW replica_counts AS (
                     AND
                   d.status = 'active'
                     AND
+                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
+                    AND
                   c.is_affiliated
                     AND
                   p.city = curkey.city
@@ -456,6 +468,8 @@ CREATE MATERIALIZED VIEW replica_counts AS (
                     AND
                   d.status = 'active'
                     AND
+                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
+                    AND
                   c.is_affiliated
                     AND
                   p.country = curkey.country
@@ -479,6 +493,8 @@ CREATE MATERIALIZED VIEW replica_counts AS (
                   d.end_time > expiration_cutoff()
                     AND
                   d.status = 'active'
+                    AND
+                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
                     AND
                   c.is_affiliated
                     AND
@@ -593,7 +609,7 @@ CREATE MATERIALIZED VIEW replica_counts AS (
       ) agg
     ) AS pending
   FROM pieces curpiece
-  WHERE NOT COALESCE( (meta->'inactive')::BOOL, false )
+  WHERE NOT COALESCE( (curpiece.meta->'inactive')::BOOL, false )
 );
 CREATE UNIQUE INDEX replica_counts_piece_cid ON evergreen.replica_counts ( piece_cid );
 ANALYZE evergreen.replica_counts;
@@ -629,6 +645,8 @@ CREATE VIEW frontpage_stats_v0 AS (
           AND
         pd.status = 'active'
           AND
+        NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
+          AND
         c.is_affiliated
     ),
     active_unique AS (
@@ -645,6 +663,8 @@ CREATE VIEW frontpage_stats_v0 AS (
             JOIN clients c USING ( client_id )
           WHERE
             pd.status = 'active'
+              AND
+            NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
               AND
             c.is_affiliated
         )

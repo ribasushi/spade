@@ -116,6 +116,8 @@ func apiListEligible(c echo.Context) error {
 								AND
 							pd.status = 'active'
 								AND
+							NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
+								AND
 							pd.end_time > expiration_cutoff()
 					)
 						+
@@ -210,6 +212,8 @@ func apiListEligible(c echo.Context) error {
 						pd.piece_cid = d.piece_cid
 							AND
 						pd.status != 'terminated'
+							AND
+						NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
 							AND
 						pd.provider_id = $2
 				)

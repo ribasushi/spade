@@ -121,6 +121,8 @@ func apiListPendingProposals(c echo.Context) error {
 						NOT prelist.is_published
 							AND
 						pd.status = 'active'
+							AND
+						NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
 					ORDER BY pd.is_filplus DESC, pd.end_time DESC
 				) subq
 			) AS sources

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -195,36 +196,33 @@ var trackDeals = &cli.Command{
 				clientLookup[d.Proposal.Client] = robust
 			}
 
-			var statusMeta *string
+			var statusDetails string
 			var sectorStart *filabi.ChainEpoch
 			status := "published"
 			var termTime *time.Time
 			if d.State.SlashEpoch != -1 {
 				status = "terminated"
 
-				m := "entered final-slashed state"
-				statusMeta = &m
+				statusDetails = "entered final-slashed state"
 
 				tn := time.Now()
 				termTime = &tn
 			} else if d.State.SectorStartEpoch > 0 {
 				sectorStart = &d.State.SectorStartEpoch
 				status = "active"
-				m := fmt.Sprintf(
+				statusDetails = fmt.Sprintf(
 					"containing sector active as of %s at epoch %d",
 					common.MainnetTime(d.State.SectorStartEpoch).Format("2006-01-02 15:04:05"),
 					d.State.SectorStartEpoch,
 				)
-				statusMeta = &m
 			} else if d.Proposal.StartEpoch+filmarket.DealUpdatesInterval < stateTipset.Height() {
 				// if things are that late: they are never going to make it
 				status = "terminated"
 
-				m := fmt.Sprintf(
+				statusDetails = fmt.Sprintf(
 					"containing sector missed expected sealing epoch %d",
 					d.Proposal.StartEpoch,
 				)
-				statusMeta = &m
 
 				tn := time.Now()
 				termTime = &tn
@@ -254,15 +252,24 @@ var trackDeals = &cli.Command{
 				labelCid = &lcs
 			}
 
+			metaJ, err := json.Marshal(
+				struct {
+					Det string `json:"status_details"`
+				}{Det: statusDetails},
+			)
+			if err != nil {
+				return err
+			}
+
 			_, err = tx.Exec(
 				ctx,
 				`
 				INSERT INTO published_deals
-					( deal_id, client_id, provider_id, piece_cid, label, decoded_label, is_filplus, status, status_meta, start_epoch, end_epoch, sector_start_epoch, termination_detection_time )
-					VALUES ( $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13 )
+					( deal_id, client_id, provider_id, piece_cid, label, decoded_label, is_filplus, status, meta, start_epoch, end_epoch, sector_start_epoch, termination_detection_time )
+					VALUES ( $1, $2, $3, $4, $5, $6, $7, $8, $9::JSONB, $10, $11, $12, $13 )
 				ON CONFLICT ( deal_id ) DO UPDATE SET
 					status = EXCLUDED.status,
-					status_meta = EXCLUDED.status_meta,
+					meta = COALESCE( published_deals.meta, '{}' ) || EXCLUDED.meta,
 					sector_start_epoch = COALESCE( EXCLUDED.sector_start_epoch, published_deals.sector_start_epoch ),
 					termination_detection_time = EXCLUDED.termination_detection_time
 				`,
@@ -274,7 +281,7 @@ var trackDeals = &cli.Command{
 				labelCid,
 				d.Proposal.VerifiedDeal,
 				status,
-				statusMeta,
+				metaJ,
 				d.Proposal.StartEpoch,
 				d.Proposal.EndEpoch,
 				sectorStart,
@@ -329,7 +336,7 @@ var trackDeals = &cli.Command{
 				`
 				UPDATE published_deals SET
 					status = 'terminated',
-					status_meta = 'deal no longer part of market-actor state',
+					meta = COALESCE( meta, '{}' ) || '{ "status_details":"deal no longer part of market-actor state" }',
 					termination_detection_time = NOW()
 				WHERE
 					deal_id = ANY ( $1::BIGINT[] )
@@ -341,6 +348,24 @@ var trackDeals = &cli.Command{
 			if err != nil {
 				return err
 			}
+		}
+
+		// force-inactivate any deals with a broken label *OR* with an inactivated piece
+		_, err = tx.Exec(
+			ctx,
+			`
+			UPDATE published_deals SET
+				meta = COALESCE( meta, '{}' ) || '{ "inactive": true }'
+			WHERE
+				decoded_label IS NULL
+					OR
+				decoded_label LIKE 'baga6ea4sea%'
+					OR
+				piece_cid IN ( SELECT piece_cid FROM pieces WHERE (meta->'inactive')::bool )
+			`,
+		)
+		if err != nil {
+			return err
 		}
 
 		// set all robust addresses
@@ -424,6 +449,24 @@ var trackDeals = &cli.Command{
 			return err
 		}
 
+		// clear out proposals that had an active deal which subsequently was deemed invalid
+		if _, err = tx.Exec(
+			ctx,
+			`
+			UPDATE proposals SET
+				proposal_failstamp = ( extract(epoch from CLOCK_TIMESTAMP()) * 1000000000 )::BIGINT,
+				meta = JSONB_SET(
+					COALESCE( meta, '{}' ),
+					'{ failure }',
+					TO_JSONB( 'deal ' || activated_deal_id || ' was declared inactive' )
+				)
+			WHERE
+				activated_deal_id IN ( SELECT deal_id FROM published_deals WHERE (meta->'inactive')::BOOl )
+			`,
+		); err != nil {
+			return err
+		}
+
 		// refresh matviews
 		log.Info("refreshing materialized views")
 		for _, mv := range []string{
@@ -434,12 +477,14 @@ var trackDeals = &cli.Command{
 			`deallist_eligible`,
 			`replica_counts`,
 		} {
+			t0 := time.Now()
 			if _, err = tx.Exec(ctx, `REFRESH MATERIALIZED VIEW CONCURRENTLY `+mv); err != nil {
 				return err
 			}
 			if _, err = tx.Exec(ctx, `ANALYZE `+mv); err != nil {
 				return err
 			}
+			log.Infow("refreshed", "view", mv, "took_seconds", time.Since(t0).Truncate(time.Millisecond).Seconds())
 		}
 
 		return tx.Commit(ctx)

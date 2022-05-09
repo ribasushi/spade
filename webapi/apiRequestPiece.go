@@ -74,14 +74,16 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		WITH
 			providers_of_active_nonexpiring_deals_for_piece AS (
 				SELECT DISTINCT( provider_id )
-					FROM published_deals
+					FROM published_deals pd
 					JOIN clients c USING ( client_id )
 				WHERE
-					piece_cid = $1
+					pd.piece_cid = $1
 						AND
-					status = 'active'
+					pd.status = 'active'
 						AND
-					end_time > expiration_cutoff()
+					NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
+						AND
+					pd.end_time > expiration_cutoff()
 						AND
 					c.is_affiliated
 			),
@@ -151,6 +153,8 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 								AND
 							provider_id = $2
 								AND
+							NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
+								AND
 							(
 								pd.status = 'terminated'
 									OR
@@ -170,6 +174,8 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 							pd.provider_id = $2
 								AND
 							pd.status != 'terminated'
+								AND
+							NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
 								AND
 							pd.end_time > expiration_cutoff()
 					)
