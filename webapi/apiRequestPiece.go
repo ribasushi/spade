@@ -281,7 +281,10 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		curOutstandingBytes = new(int64)
 	}
 
-	r := types.ResponseDealRequest{CurOutstandingBytes: *curOutstandingBytes}
+	r := types.ResponseDealRequest{
+		CurOutstandingBytes: *curOutstandingBytes,
+		MaxOutstandingBytes: &maxBytes,
+	}
 
 	if *curOutstandingBytes >= maxBytes {
 		return retPayloadAnnotated(
@@ -293,7 +296,6 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 		)
 	}
 
-	r.MaxOutstandingBytes = &maxBytes
 	r.TentativeCounts = cn
 	if cn.Self >= cn.MaxSp ||
 		cn.InOrg >= cn.MaxOrg ||
