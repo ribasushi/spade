@@ -18,7 +18,7 @@ block-producing Filecoin storage-system. You will not be able to perform the API
 
     B. Make it executable `chmod 755 fil-spid.bash`
 
-    C. Use it as part of your `curl -sLH "Authorization: $( ./fil-spid.bash f0XXXX )" https://api.evergreen.filecoin.io/...`
+    C. Use it as part of your requests, e.g: `curl -sLH "Authorization: $( ./fil-spid.bash f0XXXX )" https://api.evergreen.filecoin.io/pending_proposals`
 
 
 1. Examine the lists of soon-to-expire deals currently in need for a refresh. There are 2 API endpoints for this:

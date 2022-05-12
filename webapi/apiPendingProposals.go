@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/filecoin-project/evergreen-dealer/common"
@@ -211,21 +210,22 @@ func apiListPendingProposals(c echo.Context) error {
 		}
 	})
 
-	msg := strings.Join([]string{
-		"This is an overview of deals recently proposed to SP " + spID,
-		fmt.Sprintf(
-			`
+	msg := fmt.Sprintf(
+		`
+This is an overview of deals recently proposed to SP %s
+
 There currently are %0.2f GiB of pending deals:
   % 4d deal-proposals to send out
   % 4d successful proposals pending publishing
   % 4d deals published on chain awaiting sector activation
-`,
-			float64(r.CurOutstandingBytes)/(1<<30),
-			countPendingProposals,
-			len(r.PendingProposals),
-			countPublishedDeals,
-		),
-	}, "\n")
+
+You can request deal proposals using API endpoints as described in the docs`,
+		spID,
+		float64(r.CurOutstandingBytes)/(1<<30),
+		countPendingProposals,
+		len(r.PendingProposals),
+		countPublishedDeals,
+	)
 
 	if isActive {
 		msg += fmt.Sprintf(

@@ -22,9 +22,6 @@ func apiListEligible(c echo.Context) error {
 		return err
 	}
 
-	// log.Info("entered")
-	// defer log.Info("left")
-
 	lim := uint64(128)
 	limStr := c.QueryParams().Get("limit")
 	if limStr != "" {
@@ -53,10 +50,8 @@ func apiListEligible(c echo.Context) error {
 		"and can proceed to `lotus-miner storage-deals import-data ...` the corresponding car file.",
 		``,
 		`In order to see what proposals you have currently pending, you can invoke:`,
-		fmt.Sprintf(` echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" 'https://api.evergreen.filecoin.io/pending_proposals' | sh `, spID),
+		" " + urlAuthedFor(c, spID, "/pending_proposals"),
 	}, "\n")
-
-	// log.Info("authed")
 
 	var rows pgx.Rows
 	var info string
@@ -227,8 +222,6 @@ func apiListEligible(c echo.Context) error {
 	}
 	defer rows.Close()
 
-	// log.Info("queried")
-
 	type pieceSpCombo struct {
 		pcid string
 		spid string
@@ -283,11 +276,7 @@ func apiListEligible(c echo.Context) error {
 			}
 
 			p.PayloadCids = append(p.PayloadCids, s.NormalizedPayloadCid)
-			p.SampleRequestCmd = fmt.Sprintf(
-				`echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" https://api.evergreen.filecoin.io/request_piece/%s | sh`,
-				spID,
-				p.PieceCid,
-			)
+			p.SampleRequestCmd = urlAuthedFor(c, spID, "/request_piece/"+p.PieceCid)
 			pieces[p.PieceCid] = &p
 		}
 
@@ -314,8 +303,6 @@ func apiListEligible(c echo.Context) error {
 		ret = append(ret, p)
 	}
 
-	// log.Info("pulled")
-
 	sort.Slice(ret, func(i, j int) bool {
 		si, sj := ret[i].Sources[len(ret[i].Sources)-1], ret[j].Sources[len(ret[j].Sources)-1]
 
@@ -333,14 +320,13 @@ func apiListEligible(c echo.Context) error {
 	if uint64(len(ret)) > lim {
 		info = strings.Join([]string{
 			fmt.Sprintf(`NOTE: The complete list of %d entries has been TRUNCATED to the top %d.`, len(ret), lim),
-			fmt.Sprintf(`You can add the ...?limit=%d parameter to your call to see the full (possibly very large) list.`, len(ret)),
-			``,
+			"You can use the 'limit' param in your API call to see the full (possibly very large) list:",
+			" " + urlAuthedFor(c, spID, fmt.Sprintf("%s?limit=%d", c.Request().URL.Path, len(ret))),
+			"",
 			info,
 		}, "\n")
 		ret = ret[:lim]
 	}
-
-	// log.Info("sorted")
 
 	return retPayloadAnnotated(c, http.StatusOK, ret, info)
 }

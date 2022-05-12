@@ -420,7 +420,7 @@ func apiRequestPiece(c echo.Context) (defErr error) {
 			fmt.Sprintf("Deal queued for pcid %s", pcidStr),
 			``,
 			`In about 5 minutes check the pending list:`,
-			fmt.Sprintf(` echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" 'https://api.evergreen.filecoin.io/pending_proposals' | sh `, spID),
+			" " + urlAuthedFor(c, spID, "/pending_proposals"),
 		}, "\n"),
 	)
 }

@@ -1,9 +1,11 @@
 {
   "response_code": <!--# echo var="status" default="000" -->,
   "error_lines": [
-    " Your request resulted in the non-2xx status: <!--# echo var="status" default="000" -->            ",
-    "                                                             ",
+    " You have made an INVALID request of '<!--# echo var="request_uri" -->' ",
+    " which resulted in the non-2xx status: <!--# echo var="status" default="000" --> ",
+    "",
     " If you are unsure where to start - visit the project README ",
-    " https://github.com/filecoin-project/evergreen-dealer#readme "
+    " https://github.com/filecoin-project/evergreen-dealer#readme ",
+    " for a list of recognized API calls.                         "
   ]
 }

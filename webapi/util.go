@@ -90,6 +90,21 @@ func retPayloadAnnotated(c echo.Context, code int, payload types.ResponsePayload
 	return c.JSONPretty(code, r, "  ")
 }
 
+func urlAuthedFor(c echo.Context, spID string, path string) string {
+	prot := c.Request().Header.Get("X-Forwarded-Proto")
+	if prot == "" {
+		prot = "http"
+	}
+
+	return fmt.Sprintf(
+		`echo curl -sLH "Authorization: $( ./fil-spid.bash %s )" %s://%s%s | sh`,
+		spID,
+		prot,
+		c.Request().Host,
+		path,
+	)
+}
+
 func retFail(c echo.Context, internalReason interface{}, fMsg string, args ...interface{}) error {
 
 	if reqUUID := c.Request().Header.Get("X-REQUEST-UUID"); reqUUID != "" {
