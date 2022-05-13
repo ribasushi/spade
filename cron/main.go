@@ -108,7 +108,7 @@ func main() {
 		Usage: "Misc background processes for " + common.AppName,
 		Commands: []*cli.Command{
 			trackDeals,
-			// pushPrometheusMetrics,
+			pushMetrics,
 			proposePending,
 		},
 		Flags: common.CliFlags,

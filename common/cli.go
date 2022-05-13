@@ -56,6 +56,10 @@ var CliFlags = []cli.Flag{ //nolint:revive
 		Value: "postgres:///dbname?user=username&password=&host=/var/run/postgresql",
 	}),
 	altsrc.NewStringFlag(&cli.StringFlag{
+		Name:        "pg-metrics-connstring",
+		DefaultText: "defaults to pg-connstring",
+	}),
+	altsrc.NewStringFlag(&cli.StringFlag{
 		Name:        "prometheus_push_url",
 		DefaultText: "  {{ private, read from config file }}  ",
 		Hidden:      true,

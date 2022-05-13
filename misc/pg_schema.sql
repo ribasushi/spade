@@ -13,6 +13,12 @@ LANGUAGE sql PARALLEL RESTRICTED AS $$
 $$;
 
 CREATE OR REPLACE FUNCTION
+  evergreen.continents() RETURNS TABLE ( continent TEXT )
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+  SELECT * FROM ( VALUES ('af'), ('as'), ('eu'), ('na'), ('oc'), ('sa') ) lst
+$$;
+
+CREATE OR REPLACE FUNCTION
   evergreen.max_program_replicas() RETURNS INTEGER
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT 10
@@ -67,6 +73,17 @@ BEGIN
   RETURN NEW;
 END;
 $$;
+
+CREATE OR REPLACE
+  FUNCTION evergreen.record_metric_change() RETURNS TRIGGER
+    LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO evergreen.metrics_log ( name, dimensions, value, collected_at, collection_took_seconds ) VALUES ( NEW.name, NEW.dimensions, NEW.value, NEW.collected_at, NEW.collection_took_seconds );
+  RETURN NULL;
+END;
+$$;
+
 
 CREATE OR REPLACE
   FUNCTION evergreen.init_deal_related_actors() RETURNS TRIGGER
@@ -215,9 +232,35 @@ CREATE INDEX IF NOT EXISTS proposals_client_idx ON evergreen.proposals ( client_
 CREATE INDEX IF NOT EXISTS proposals_provider_idx ON evergreen.proposals ( provider_id );
 CREATE INDEX IF NOT EXISTS proposals_piece_idx ON evergreen.proposals ( piece_cid );
 
+CREATE TABLE IF NOT EXISTS evergreen.metrics (
+  name TEXT NOT NULL,
+  dimensions TEXT[][] NOT NULL,
+  description TEXT NOT NULL,
+  value BIGINT,
+  collected_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CLOCK_TIMESTAMP(),
+  collection_took_seconds NUMERIC NOT NULL,
+  CONSTRAINT metric UNIQUE ( name, dimensions )
+);
+CREATE TRIGGER trigger_store_metric_logs
+  AFTER INSERT OR UPDATE ON evergreen.metrics
+  FOR EACH ROW
+  EXECUTE PROCEDURE evergreen.record_metric_change()
+;
+
+CREATE TABLE IF NOT EXISTS evergreen.metrics_log (
+  name TEXT NOT NULL,
+  dimensions TEXT[][] NOT NULL,
+  value BIGINT,
+  collected_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  collection_took_seconds NUMERIC NOT NULL
+);
+CREATE INDEX IF NOT EXISTS metrics_log_collected_name_dim ON evergreen.metrics_log ( collected_at, name );
+
+
 CREATE OR REPLACE VIEW evergreen.clients_datacap_available AS
   SELECT
     c.client_id,
+    c.client_address,
     (
       c.activateable_datacap
         -
