@@ -9,12 +9,12 @@ import (
 
 // ResponseEnvelope is the structure wrapping all responses from the Evergreen engine
 type ResponseEnvelope struct {
-	RequestID       string          `json:"request_id,omitempty"`
-	ResponseCode    int             `json:"response_code"`
-	ErrLines        []string        `json:"error_lines,omitempty"`
-	InfoLines       []string        `json:"info_lines,omitempty"`
-	ResponseEntries *int            `json:"response_entries,omitempty"`
-	Response        ResponsePayload `json:"response"`
+	RequestID       string   `json:"request_id,omitempty"`
+	ResponseCode    int      `json:"response_code"`
+	ErrLines        []string `json:"error_lines,omitempty"`
+	InfoLines       []string `json:"info_lines,omitempty"`
+	ResponseEntries *int     `json:"response_entries,omitempty"`
+	Response        []Piece  `json:"response"`
 }
 
 type isResponsePayload struct{}
@@ -84,7 +84,7 @@ type Piece struct { //nolint:revive
 	Dataset          *string      `json:"dataset"`
 	PaddedPieceSize  uint64       `json:"padded_piece_size"`
 	PayloadCids      []string     `json:"payload_cids"`
-	Sources          []DataSource `json:"sources"`
+	Sources          []FilSource  `json:"sources"`
 	SampleRequestCmd string       `json:"sample_request_cmd"`
 }
 
