@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	prometheuspush "github.com/prometheus/client_golang/prometheus/push"
 	"github.com/urfave/cli/v2"
-	"golang.org/x/xerrors"
 )
 
 type metricType string
@@ -309,7 +309,7 @@ func pushPrometheusMetrics(cctx *cli.Context) error {
 			c.Set(float64(r.value))
 			prom.Collector(c)
 		} else {
-			return xerrors.Errorf("unknown metric kind '%s'", r.kind)
+			return fmt.Errorf("unknown metric kind '%s'", r.kind)
 		}
 	}
 
@@ -366,17 +366,21 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 	}
 	defer rows.Close()
 
-	fd := rows.FieldDescriptions()
-	if len(fd) < 1 || len(fd) > 2 {
-		return nil, xerrors.Errorf("unexpected %d columns in resultset", len(fd))
+	colnames := make([]string, 0, 2)
+	for _, f := range rows.FieldDescriptions() {
+		colnames = append(colnames, string(f.Name))
+	}
+
+	if len(colnames) < 1 || len(colnames) > 2 {
+		return nil, fmt.Errorf("unexpected %d columns in resultset", len(colnames))
 	}
 
 	res := make(map[string]*int64)
 
-	if len(fd) == 1 {
+	if len(colnames) == 1 {
 
 		if !rows.Next() {
-			return nil, xerrors.New("zero rows in result")
+			return nil, errors.New("zero rows in result")
 		}
 
 		var val *int64
@@ -385,7 +389,7 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 		}
 
 		if rows.Next() {
-			return nil, xerrors.New("unexpectedly received more than one result")
+			return nil, errors.New("unexpectedly received more than one result")
 		}
 		res[""] = val
 
@@ -419,7 +423,7 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 
 		labels := make(prometheus.Labels)
 		if g != "" {
-			gType := string(fd[0].Name)
+			gType := colnames[0]
 			labels[gType] = g
 			dims = append(dims, [2]string{gType, g})
 		}
@@ -427,7 +431,7 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 		if m.kind == metricCounter || m.kind == metricGauge {
 			log.Infow(string(m.kind)+"Evaluated", "name", m.name, "labels", labels, "value", v, "tookSeconds", took)
 		} else {
-			return nil, xerrors.Errorf("unknown metric kind '%s'", m.kind)
+			return nil, fmt.Errorf("unknown metric kind '%s'", m.kind)
 		}
 
 		if v != nil {
