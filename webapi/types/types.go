@@ -1,20 +1,48 @@
 package types
 
+//go:generate stringer -type=APIErrorCode -output=types_err.go
+
 import (
 	"fmt"
 	"time"
+)
 
-	"github.com/filecoin-project/evergreen-dealer/common"
+type APIErrorCode int //nolint:revive
+
+// List of known/expected error codes
+// re-run `go generate ./...` when updating
+const (
+	ErrInvalidRequest     APIErrorCode = 4400
+	ErrUnauthorizedAccess APIErrorCode = 4401
+
+	ErrSystemTemporarilyDisabled APIErrorCode = 4001
+	ErrTenantsOutOfDatacap       APIErrorCode = 4009
+
+	ErrStorageProviderSuspended        APIErrorCode = 4010
+	ErrStorageProviderIneligibleToMine APIErrorCode = 4011
+	ErrStorageProviderAboveMaxPending  APIErrorCode = 4012
+
+	ErrUnclaimedPieceCID          APIErrorCode = 4020
+	ErrOversizedPiece             APIErrorCode = 4021
+	ErrExternalReservationRefused APIErrorCode = 4029
+
+	ErrReplicaAlreadyPending APIErrorCode = 4032
+	ErrReplicaAlreadyActive  APIErrorCode = 4031
+	ErrTooManyReplicas       APIErrorCode = 4033
 )
 
 // ResponseEnvelope is the structure wrapping all responses from the Evergreen engine
 type ResponseEnvelope struct {
-	RequestID       string          `json:"request_id,omitempty"`
-	ResponseCode    int             `json:"response_code"`
-	ErrLines        []string        `json:"error_lines,omitempty"`
-	InfoLines       []string        `json:"info_lines,omitempty"`
-	ResponseEntries *int            `json:"response_entries,omitempty"`
-	Response        ResponsePayload `json:"response"`
+	RequestID          string          `json:"request_id,omitempty"`
+	ResponseTime       time.Time       `json:"response_timestamp"`
+	ResponseStateEpoch int64           `json:"response_state_epoch,omitempty"`
+	ResponseCode       int             `json:"response_code"`
+	ErrCode            int             `json:"error_code,omitempty"`
+	ErrSlug            string          `json:"error_slug,omitempty"`
+	ErrLines           []string        `json:"error_lines,omitempty"`
+	InfoLines          []string        `json:"info_lines,omitempty"`
+	ResponseEntries    *int            `json:"response_entries,omitempty"`
+	Response           ResponsePayload `json:"response"`
 }
 
 type isResponsePayload struct{}
@@ -105,11 +133,10 @@ type FilSource struct { //nolint:revive
 	DealExpiration     time.Time  `json:"deal_expiration"`
 	IsFilplus          bool       `json:"is_filplus"`
 	SectorID           *string    `json:"sector_id"`
-	SectorExpires      *time.Time `json:"sector_expires"`
+	SectorExpiration   *time.Time `json:"sector_expiration"`
 	SampleRetrieveCmd  string     `json:"sample_retrieve_cmd"`
 
-	PieceCid             string `json:"-"`
-	NormalizedPayloadCid string `json:"-"`
+	PieceCid string `json:"-"`
 
 	expUnixNano int64
 	expCoarse   int64
@@ -133,7 +160,19 @@ func (s *FilSource) InitDerivedVals() { //nolint:revive
 		"lotus client retrieve --provider %s --maxPrice 0 --allow-local --car '%s' $(pwd)/%s__%s.car",
 		s.ProviderID,
 		s.OriginalPayloadCid,
-		common.TrimCidString(s.PieceCid),
-		common.TrimCidString(s.NormalizedPayloadCid),
+		TrimCidString(s.PieceCid),
+		TrimCidString(s.OriginalPayloadCid),
 	)
+}
+
+const (
+	cidTrimPrefix = 6
+	cidTrimSuffix = 8
+)
+
+func TrimCidString(cs string) string { //nolint:revive
+	if len(cs) <= cidTrimPrefix+cidTrimSuffix+2 {
+		return cs
+	}
+	return cs[0:cidTrimPrefix] + "~" + cs[len(cs)-cidTrimSuffix:]
 }
