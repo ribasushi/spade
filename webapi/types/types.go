@@ -26,8 +26,8 @@ const (
 	ErrOversizedPiece             APIErrorCode = 4021
 	ErrExternalReservationRefused APIErrorCode = 4029
 
-	ErrReplicaAlreadyPending APIErrorCode = 4032
 	ErrReplicaAlreadyActive  APIErrorCode = 4031
+	ErrReplicaAlreadyPending APIErrorCode = 4032
 	ErrTooManyReplicas       APIErrorCode = 4033
 )
 
@@ -112,57 +112,47 @@ type Piece struct { //nolint:revive
 	Dataset          *string      `json:"dataset"`
 	PaddedPieceSize  uint64       `json:"padded_piece_size"`
 	PayloadCids      []string     `json:"payload_cids"`
-	Sources          []DataSource `json:"sources"`
 	SampleRequestCmd string       `json:"sample_request_cmd"`
+	Sources          []DataSource `json:"sources,omitempty"`
 }
 
 type DataSource interface { //nolint:revive
 	SrcType() string
-	ExpiryUnixNano() int64
-	ExpiryCoarse() int64
-	SysID() string
 }
 
 type FilSource struct { //nolint:revive
 	SourceType string `json:"source_type"`
-	ProviderID string `json:"provider_id"`
 
 	// filecoin specific
 	DealID             int64      `json:"deal_id"`
+	ProviderID         string     `json:"provider_id"`
 	OriginalPayloadCid string     `json:"original_payload_cid"`
 	DealExpiration     time.Time  `json:"deal_expiration"`
 	IsFilplus          bool       `json:"is_filplus"`
-	SectorID           *string    `json:"sector_id"`
-	SectorExpiration   *time.Time `json:"sector_expiration"`
+	SectorID           *string    `json:"sector_id,omitempty"`
+	SectorExpiration   *time.Time `json:"sector_expiration,omitempty"`
 	SampleRetrieveCmd  string     `json:"sample_retrieve_cmd"`
-
-	PieceCid string `json:"-"`
-
-	expUnixNano int64
-	expCoarse   int64
-	sysIDStr    string
 }
 
+func (s *FilSource) SrcType() string { return s.SourceType } //nolint:revive
 var _ DataSource = &FilSource{}
 
-func (s *FilSource) SrcType() string       { return s.SourceType }  //nolint:revive
-func (s *FilSource) ExpiryCoarse() int64   { return s.expCoarse }   //nolint:revive
-func (s *FilSource) ExpiryUnixNano() int64 { return s.expUnixNano } //nolint:revive
-func (s *FilSource) SysID() string         { return s.sysIDStr }    //nolint:revive
-
-func (s *FilSource) InitDerivedVals() { //nolint:revive
+func (s *FilSource) InitDerivedVals(pieceCid string) error { //nolint:revive
 	s.SourceType = "Filecoin"
-	s.sysIDStr = fmt.Sprintf("%d", s.DealID)
-	s.expUnixNano = s.DealExpiration.UnixNano()
-	s.expCoarse = s.DealExpiration.Truncate(time.Hour * 24 * 7).UnixNano()
+
+	if s.ProviderID == "" || s.OriginalPayloadCid == "" {
+		return fmt.Errorf("filecoin source object missing mandatory values: %#v", s)
+	}
 
 	s.SampleRetrieveCmd = fmt.Sprintf(
 		"lotus client retrieve --provider %s --maxPrice 0 --allow-local --car '%s' $(pwd)/%s__%s.car",
 		s.ProviderID,
 		s.OriginalPayloadCid,
-		TrimCidString(s.PieceCid),
+		TrimCidString(pieceCid),
 		TrimCidString(s.OriginalPayloadCid),
 	)
+
+	return nil
 }
 
 const (

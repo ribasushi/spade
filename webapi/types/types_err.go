@@ -18,8 +18,8 @@ func _() {
 	_ = x[ErrUnclaimedPieceCID-4020]
 	_ = x[ErrOversizedPiece-4021]
 	_ = x[ErrExternalReservationRefused-4029]
-	_ = x[ErrReplicaAlreadyPending-4032]
 	_ = x[ErrReplicaAlreadyActive-4031]
+	_ = x[ErrReplicaAlreadyPending-4032]
 	_ = x[ErrTooManyReplicas-4033]
 }
 
