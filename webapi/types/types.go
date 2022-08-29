@@ -53,20 +53,18 @@ type ResponsePayload interface { //nolint:revive
 
 // ResponsePendingProposals is the response payload returned by the .../pending_proposals endpoint
 type ResponsePendingProposals struct {
-	RecentFailures      []ProposalFailure `json:"recent_failures,omitempty"`
-	CurOutstandingBytes int64             `json:"bytes_pending_current"`
-	MaxOutstandingBytes *int64            `json:"bytes_pending_max"`
-	PendingProposals    []DealProposal    `json:"pending_proposals"`
+	RecentFailures   []ProposalFailure `json:"recent_failures,omitempty"`
+	PendingProposals []DealProposal    `json:"pending_proposals"`
 }
 
 // ResponseDealRequest is the response payload returned by the .../request_piece/{{PieceCid}} endpoint
 type ResponseDealRequest struct {
-	TentativeCounts     ReplicaCounts `json:"tentative_replica_counts"`
-	CurOutstandingBytes int64         `json:"bytes_pending_current"`
-	MaxOutstandingBytes *int64        `json:"bytes_pending_max"`
+	ReplicationCounts []TenantReplicationCounts `json:"tenant_replication_counts"`
+	DealStartTime     *time.Time                `json:"deal_start_time,omitempty"`
+	DealStartEpoch    *int64                    `json:"deal_start_epoch,omitempty"`
 }
 
-// ResponsePiecesEligible is the response payload returned by the .../eligible_pieces/{{sp_local|anywhere}} endpoints
+// ResponsePiecesEligible is the response payload returned by the .../eligible_pieces endpoint
 type ResponsePiecesEligible []*Piece
 
 func (ResponsePendingProposals) is() isResponsePayload { return isResponsePayload{} }
@@ -77,7 +75,7 @@ type ProposalFailure struct { //nolint:revive
 	Tstamp   time.Time `json:"timestamp"`
 	Err      string    `json:"error"`
 	PieceCid string    `json:"piece_cid"`
-	RootCid  string    `json:"root_cid"`
+	DealCid  string    `json:"deal_proposal_cid"`
 }
 
 type DealProposal struct { //nolint:revive
@@ -85,33 +83,38 @@ type DealProposal struct { //nolint:revive
 	HoursRemaining int          `json:"hours_remaining"`
 	PieceSize      int64        `json:"piece_size"`
 	PieceCid       string       `json:"piece_cid"`
-	RootCid        string       `json:"root_cid"`
+	TenantID       int16        `json:"tenant_id"`
 	StartTime      time.Time    `json:"deal_start_time"`
 	StartEpoch     int64        `json:"deal_start_epoch"`
 	ImportCMD      string       `json:"sample_import_cmd"`
 	Sources        []DataSource `json:"sources,omitempty"`
 }
 
-type ReplicaCounts struct { //nolint:revive
-	Total        int64 `json:"actual_total"`
-	InOrg        int64 `json:"actual_within_org"`
-	InCity       int64 `json:"actual_within_city"`
-	InCountry    int64 `json:"actual_within_country"`
-	InContinent  int64 `json:"actual_within_continent"`
-	Self         int64 `json:"actual_within_this_sp"`
-	MaxTotal     int64 `json:"program_max_total"`
-	MaxOrg       int64 `json:"program_max_per_org"`
-	MaxCity      int64 `json:"program_max_per_city"`
-	MaxCountry   int64 `json:"program_max_per_country"`
-	MaxContinent int64 `json:"program_max_per_continent"`
-	MaxSp        int64 `json:"program_max_per_sp"`
+type TenantReplicationCounts struct { //nolint:revive
+	TenantID int16 `json:"tenant_id"`
+
+	MaxInFlightBytes int64 `json:"tenant_max_in_flight_bytes"`
+	SpInFlightBytes  int64 `json:"actual_in_flight_bytes" db:"cur_in_flight_bytes"`
+
+	MaxTotal     int16 `json:"tenant_max_total"`
+	MaxOrg       int16 `json:"tenant_max_per_org"         db:"max_per_org"`
+	MaxCity      int16 `json:"tenant_max_per_city"        db:"max_per_city"`
+	MaxCountry   int16 `json:"tenant_max_per_country"     db:"max_per_country"`
+	MaxContinent int16 `json:"tenant_max_per_continent"   db:"max_per_continent"`
+
+	Total       int16 `json:"actual_total"                db:"cur_total"`
+	InOrg       int16 `json:"actual_within_org"           db:"cur_in_org"`
+	InCity      int16 `json:"actual_within_city"          db:"cur_in_city"`
+	InCountry   int16 `json:"actual_within_country"       db:"cur_in_country"`
+	InContinent int16 `json:"actual_within_continent"     db:"cur_in_continent"`
+
+	DealAlreadyExists bool `json:"deal_already_exists"`
 }
 
 type Piece struct { //nolint:revive
 	PieceCid         string       `json:"piece_cid"`
-	Dataset          *string      `json:"dataset"`
 	PaddedPieceSize  uint64       `json:"padded_piece_size"`
-	PayloadCids      []string     `json:"payload_cids"`
+	ClaimingTenants  []int16      `json:"tenants" db:"tenant_ids"`
 	SampleRequestCmd string       `json:"sample_request_cmd"`
 	Sources          []DataSource `json:"sources,omitempty"`
 }
@@ -120,7 +123,9 @@ type DataSource interface { //nolint:revive
 	SrcType() string
 }
 
-type FilSource struct { //nolint:revive
+// FilSourceDAG represents an item retrievable from Filecoin using a block-transport protocol like Graphsync.
+// Whenever possible users of the deal engine should default to alternative sources offering stream-protocols.
+type FilSourceDAG struct {
 	SourceType string `json:"source_type"`
 
 	// filecoin specific
@@ -134,14 +139,14 @@ type FilSource struct { //nolint:revive
 	SampleRetrieveCmd  string     `json:"sample_retrieve_cmd"`
 }
 
-func (s *FilSource) SrcType() string { return s.SourceType } //nolint:revive
-var _ DataSource = &FilSource{}
+func (s *FilSourceDAG) SrcType() string { return s.SourceType } //nolint:revive
+var _ DataSource = &FilSourceDAG{}
 
-func (s *FilSource) InitDerivedVals(pieceCid string) error { //nolint:revive
-	s.SourceType = "Filecoin"
+func (s *FilSourceDAG) InitDerivedVals(pieceCid string) error { //nolint:revive
+	s.SourceType = "FilecoinDAG"
 
 	if s.ProviderID == "" || s.OriginalPayloadCid == "" {
-		return fmt.Errorf("filecoin source object missing mandatory values: %#v", s)
+		return fmt.Errorf("filecoin DAG-source object missing mandatory values: %#v", s)
 	}
 
 	s.SampleRetrieveCmd = fmt.Sprintf(
