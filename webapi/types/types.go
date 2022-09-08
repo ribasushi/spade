@@ -12,26 +12,25 @@ type APIErrorCode int //nolint:revive
 // List of known/expected error codes
 // re-run `go generate ./...` when updating
 const (
-	ErrInvalidRequest     APIErrorCode = 4400
-	ErrUnauthorizedAccess APIErrorCode = 4401
+	ErrInvalidRequest            APIErrorCode = 4400
+	ErrUnauthorizedAccess        APIErrorCode = 4401
+	ErrSystemTemporarilyDisabled APIErrorCode = 4503
 
-	ErrSystemTemporarilyDisabled APIErrorCode = 4001
-	ErrTenantsOutOfDatacap       APIErrorCode = 4009
+	ErrOversizedPiece                  APIErrorCode = 4011
+	ErrStorageProviderSuspended        APIErrorCode = 4012
+	ErrStorageProviderIneligibleToMine APIErrorCode = 4013
 
-	ErrStorageProviderSuspended        APIErrorCode = 4010
-	ErrStorageProviderIneligibleToMine APIErrorCode = 4011
-	ErrStorageProviderAboveMaxPending  APIErrorCode = 4012
+	ErrUnclaimedPieceCID         APIErrorCode = 4020
+	ErrProviderHasReplica        APIErrorCode = 4021
+	ErrTenantsOutOfDatacap       APIErrorCode = 4022
+	ErrTooManyReplicas           APIErrorCode = 4023
+	ErrProviderAboveMaxInFlight  APIErrorCode = 4024
+	ErrReplicationRulesViolation APIErrorCode = 4029 // catch-all for when there is no common rejection theme for competing tenants
 
-	ErrUnclaimedPieceCID          APIErrorCode = 4020
-	ErrOversizedPiece             APIErrorCode = 4021
-	ErrExternalReservationRefused APIErrorCode = 4029
-
-	ErrReplicaAlreadyActive  APIErrorCode = 4031
-	ErrReplicaAlreadyPending APIErrorCode = 4032
-	ErrTooManyReplicas       APIErrorCode = 4033
+	ErrExternalReservationRefused APIErrorCode = 4030 // some tenants are looking to add an additional check on their end
 )
 
-// ResponseEnvelope is the structure wrapping all responses from the Evergreen engine
+// ResponseEnvelope is the structure wrapping all responses from the deal engine
 type ResponseEnvelope struct {
 	RequestID          string          `json:"request_id,omitempty"`
 	ResponseTime       time.Time       `json:"response_timestamp"`
