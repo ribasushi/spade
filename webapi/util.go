@@ -6,18 +6,43 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/dgraph-io/ristretto"
-	"github.com/filecoin-project/evergreen-dealer/common"
+	cmn "github.com/filecoin-project/evergreen-dealer/common"
 	"github.com/filecoin-project/evergreen-dealer/webapi/types"
-	filaddr "github.com/filecoin-project/go-address"
 	"github.com/jackc/pgx/v4"
 	"github.com/labstack/echo/v4"
+	"golang.org/x/xerrors"
 )
 
-func retPayloadAnnotated(c echo.Context, code int, payload types.ResponsePayload, fmsg string, args ...interface{}) error {
+func truthyBoolQueryParam(c echo.Context, pname string) bool {
+	if !c.QueryParams().Has(pname) {
+		return false
+	}
+	p := strings.ToLower(c.QueryParams().Get(pname))
+	if p != "0" && p != "false" && p != "no" {
+		return true
+	}
+	return false
+}
+
+func parseUIntQueryParam(c echo.Context, pname string, min, max uint64) (uint64, error) {
+	str := c.QueryParam(pname)
+	val, err := strconv.ParseUint(str, 10, 64)
+	if str == "" || err != nil {
+		return 0, xerrors.Errorf("provided '%s' value '%s' is not a valid integer", pname, str)
+	}
+	if val < min || val > max {
+		return 0, xerrors.Errorf("provided '%s' value '%s' is out of bounds ( %d ~ %d )", pname, str, min, max)
+	}
+	return val, nil
+}
+
+func retPayloadAnnotated(c echo.Context, httpCode int, errCode types.APIErrorCode, payload types.ResponsePayload, fmsg string, args ...interface{}) error {
+	ctx, ctxMeta := unpackAuthedEchoContext(c)
 
 	msg := fmt.Sprintf(fmsg, args...)
 
@@ -26,7 +51,7 @@ func retPayloadAnnotated(c echo.Context, code int, payload types.ResponsePayload
 		lines = strings.Split(msg, "\n")
 		longest := 0
 		for _, l := range lines {
-			encLen := len(l) + strings.Count(l, `"`)
+			encLen := len([]rune(l)) + strings.Count(l, `"`)
 			if encLen > longest {
 				longest = encLen
 			}
@@ -37,9 +62,11 @@ func retPayloadAnnotated(c echo.Context, code int, payload types.ResponsePayload
 	}
 
 	r := types.ResponseEnvelope{
-		RequestID:    c.Request().Header.Get("X-REQUEST-UUID"),
-		ResponseCode: code,
-		Response:     payload,
+		RequestID:          c.Request().Header.Get("X-EGD-REQUEST-UUID"),
+		ResponseStateEpoch: int64(ctxMeta.stateEpoch),
+		ResponseTime:       time.Now(),
+		ResponseCode:       httpCode,
+		Response:           payload,
 	}
 
 	pv := reflect.ValueOf(payload)
@@ -49,48 +76,50 @@ func retPayloadAnnotated(c echo.Context, code int, payload types.ResponsePayload
 		r.ResponseEntries = &l
 	}
 
-	if code < 400 {
+	if httpCode < 400 {
+		if errCode != 0 {
+			return xerrors.Errorf("HTTP code %d incongruent with internal errCode %d", httpCode, errCode)
+		}
 		r.InfoLines = lines
 	} else {
+		r.ErrCode = int(errCode)
+		r.ErrSlug = errCode.String()
 		r.ErrLines = lines
 
-		if reqUUID := c.Request().Header.Get("X-REQUEST-UUID"); reqUUID != "" && msg != "" {
-
+		if r.RequestID != "" && (msg != "" || errCode != 0) {
 			jPayload, err := json.Marshal(payload)
 			if err != nil {
-				return err
+				return cmn.WrErr(err)
 			}
-			if _, err := common.Db.Exec(
-				c.Request().Context(),
+			if _, err := cmn.Db.Exec(
+				ctx,
 				`
-				UPDATE requests SET
-					meta = JSONB_SET(
-						JSONB_SET(
-							COALESCE( meta, '{}' ),
-							'{ error }',
-							TO_JSONB( $1::TEXT )
-						),
-						'{ payload }',
-						$2::JSONB
-					)
+				UPDATE egd.requests SET
+					request_meta = JSONB_STRIP_NULLS( request_meta || JSONB_BUILD_OBJECT(
+						'error', $1::TEXT,
+						'error_code', $2::INTEGER,
+						'error_slug', $3::TEXT,
+						'payload', $4::JSONB
+					) )
 				WHERE
-					request_uuid = $3
-						AND
-					meta->'error' IS NULL
+					request_uuid = $5
 				`,
 				msg,
+				int(errCode),
+				errCode.String(),
 				jPayload,
-				reqUUID,
+				r.RequestID,
 			); err != nil {
-				return err
+				return cmn.WrErr(err)
 			}
 		}
 	}
 
-	return c.JSONPretty(code, r, "  ")
+	// FIXME - only prettify on curl and similar
+	return c.JSONPretty(httpCode, r, "  ")
 }
 
-func urlAuthedFor(c echo.Context, spID string, path string) string {
+func curlAuthedForSP(c echo.Context, spID cmn.ActorID, path string) string {
 	prot := c.Request().Header.Get("X-Forwarded-Proto")
 	if prot == "" {
 		prot = "http"
@@ -105,35 +134,11 @@ func urlAuthedFor(c echo.Context, spID string, path string) string {
 	)
 }
 
-func retFail(c echo.Context, internalReason interface{}, fMsg string, args ...interface{}) error {
-
-	if reqUUID := c.Request().Header.Get("X-REQUEST-UUID"); reqUUID != "" {
-
-		outJ, err := json.Marshal(struct {
-			Err         string      `json:"error"`
-			ErrInternal interface{} `json:"internal,omitempty"`
-		}{
-			Err:         fmt.Sprintf(fMsg, args...),
-			ErrInternal: internalReason,
-		})
-		if err != nil {
-			return err
-		}
-
-		if _, err = common.Db.Exec(
-			c.Request().Context(),
-			`UPDATE requests SET meta = $1 WHERE request_uuid = $2`,
-			outJ,
-			reqUUID,
-		); err != nil {
-			return err
-		}
-
-	}
-
+func retFail(c echo.Context, errCode types.APIErrorCode, fMsg string, args ...interface{}) error {
 	return retPayloadAnnotated(
 		c,
 		http.StatusForbidden, // DO NOT use 400: we rewrite that on the nginx level to normalize a class of transport errors
+		errCode,
 		nil,
 		fMsg, args...,
 	)
@@ -144,6 +149,7 @@ func retAuthFail(c echo.Context, f string, args ...interface{}) error {
 	return retPayloadAnnotated(
 		c,
 		http.StatusUnauthorized,
+		types.ErrUnauthorizedAccess,
 		nil,
 		echo.ErrUnauthorized.Error()+"\n\n"+f,
 		args...,
@@ -156,19 +162,19 @@ var providerEligibleCache, _ = ristretto.NewCache(&ristretto.Config{
 	Cost:    func(interface{}) int64 { return 1 },
 })
 
-func ineligibleSpMsg(spID string) string {
+func ineligibleSpMsg(spID cmn.ActorID) string {
 	return fmt.Sprintf(
 		`
-At the time of this request Storage provider %s is not eligible to participate in the program
+At the time of this request Storage provider %s is not eligible to use this deal engine
 ( this state is is almost certainly *temporary* )
 
 Make sure that you:
-- Have registered your SP in accordance with the program rules: https://is.gd/filecoin_evergreen_regform
+- Have registered your SP in accordance with each individual tenant
 - Are continuing to serve previously onboarded datasets reliably and free of charge
 - Have sufficient quality-adjusted power to participate in block rewards
 - Have not faulted in the past 48h
 
-If the problem persists, or you believe this is a spurious error: please contact the program
+If the problem persists, or you believe this is a spurious error: please contact the engine
 administrators in #slingshot-evergreen over at the Filecoin Slack https://filecoin.io/slack
 ( direct link: https://filecoinproject.slack.com/archives/C0377FJCG1L )
 `,
@@ -176,83 +182,55 @@ administrators in #slingshot-evergreen over at the Filecoin Slack https://fileco
 	)
 }
 
-func spIneligibleReason(ctx context.Context, spID string) (defIneligibleReason string, defErr error) {
+func spIneligibleErr(ctx context.Context, spID cmn.ActorID) (defIneligibleCode types.APIErrorCode, defErr error) {
 
 	// do not cache chain-independent factors
 	var ignoreChainEligibility bool
-	err := common.Db.QueryRow(
+	err := cmn.Db.QueryRow(
 		ctx,
-		`SELECT COALESCE( (meta->'ignore_chain_eligibility')::BOOL, false )
-			FROM providers
+		`
+		SELECT COALESCE( ( provider_meta->'ignore_chain_eligibility' )::BOOL, false )
+			FROM egd.providers
 		WHERE
-			is_active
+			NOT COALESCE( ( provider_meta->'globally_inactivated' )::BOOL, false )
 				AND
 			provider_id = $1
 		`,
 		spID,
 	).Scan(&ignoreChainEligibility)
 	if err == pgx.ErrNoRows {
-		return "provider not marked active", nil
+		return types.ErrStorageProviderSuspended, nil
 	} else if err != nil {
-		return "", err
+		return 0, cmn.WrErr(err)
 	} else if ignoreChainEligibility {
-		return "", nil
+		return 0, nil
 	}
 
 	defer func() {
 		if defErr != nil {
-			providerEligibleCache.Del(spID)
-			defIneligibleReason = ""
+			providerEligibleCache.Del(uint64(spID))
+			defIneligibleCode = 0
 		} else {
-			providerEligibleCache.SetWithTTL(spID, defIneligibleReason, 1, time.Minute)
+			providerEligibleCache.SetWithTTL(uint64(spID), defIneligibleCode, 1, time.Minute)
 		}
 	}()
 
-	if protoReason, found := providerEligibleCache.Get(spID); found {
-		return protoReason.(string), nil
+	if protoReason, found := providerEligibleCache.Get(uint64(spID)); found {
+		return protoReason.(types.APIErrorCode), nil
 	}
 
-	curTipset, err := common.LotusLookbackTipset(ctx)
+	curTipset, err := cmn.DefaultLookbackTipset(ctx)
 	if err != nil {
-		return "", err
+		return 0, cmn.WrErr(err)
 	}
 
-	spAddr, err := filaddr.NewFromString(spID)
+	mbi, err := cmn.LotusAPIHeavy.MinerGetBaseInfo(ctx, spID.AsFilAddr(), curTipset.Height(), curTipset.Key())
 	if err != nil {
-		return "", err
-	}
-	mbi, err := common.LotusAPI.MinerGetBaseInfo(ctx, spAddr, curTipset.Height(), curTipset.Key())
-	if err != nil {
-		return "", err
+		return 0, cmn.WrErr(err)
 	}
 	if mbi == nil || !mbi.EligibleForMining {
-		return "MBI-ineligible", nil
+		return types.ErrStorageProviderIneligibleToMine, nil
 	}
 
-	// reenable the fault-checks a bit later
-
-	/*
-
-		ydayTipset, err := common.LotusAPI.ChainGetTipSetByHeight(
-			ctx,
-			curTipset.Height()-filactors.EpochsInDay+1, // X-2880+1
-			filtypes.TipSetKey{},
-		)
-		if err != nil {
-			return "", err
-		}
-
-		for _, ts := range []*filtypes.TipSet{curTipset, ydayTipset} {
-			curMF, err := common.LotusAPI.StateMinerFaults(ctx, sp, ts.Key())
-			if err != nil {
-				return "", err
-			}
-			if fc, _ := curMF.Count(); fc != 0 {
-				return fmt.Sprintf("%d faults at epoch %d", fc, ts.Height()), nil
-			}
-		}
-
-	*/
-
-	return "", nil
+	return 0, nil
 }

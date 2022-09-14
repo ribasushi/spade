@@ -9,8 +9,9 @@
 GOLOG_LOG_FMT=json
 
 # If another process is running, the lock is silently observed without logging anything
-*/5 * * * * $HOME/evergreen-dealer/misc/log_and_run.bash cron_track-deals.log.ndjson      $HOME/evergreen-dealer/bin/dealer-cron track-deals
-* * * * *   $HOME/evergreen-dealer/misc/log_and_run.bash cron_propose-pending.log.ndjson  $HOME/evergreen-dealer/bin/dealer-cron propose-pending
+*/5 * * * * $HOME/evergreen-dealer/misc/log_and_run.bash cron_track-deals.log.ndjson                $HOME/evergreen-dealer/bin/dealer-cron track-deals
+* * * * *   $HOME/evergreen-dealer/misc/log_and_run.bash cron_sign-pending.log.ndjson               $HOME/evergreen-dealer/bin/dealer-cron sign-pending
+* * * * *   sleep 5 && $HOME/evergreen-dealer/misc/log_and_run.bash cron_propose-pending.log.ndjson $HOME/evergreen-dealer/bin/dealer-cron propose-pending
 
-*/3 * * * * $HOME/evergreen-dealer/misc/log_and_run.bash cron_push-metrics.log.ndjson     $HOME/evergreen-dealer/bin/dealer-cron  push-metrics
+*/3 * * * * $HOME/evergreen-dealer/misc/log_and_run.bash cron_push-metrics.log.ndjson     $HOME/evergreen-dealer/bin/dealer-cron push-metrics
 */5 * * * * $HOME/evergreen-dealer/misc/log_and_run.bash cron_export-stats.log            $HOME/evergreen-dealer/misc/export_stats.bash

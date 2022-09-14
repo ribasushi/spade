@@ -1,3 +1,6 @@
+// This sub-module contains complete, dependency-free definitions of all
+// possible responses of the EGD API. This includes the "root" ResponseEnvelope
+// struct and all of its dependencies.
 package types
 
 //go:generate stringer -type=APIErrorCode -output=types_err.go
@@ -9,8 +12,6 @@ import (
 
 type APIErrorCode int //nolint:revive
 
-// List of known/expected error codes
-// re-run `go generate ./...` when updating
 const (
 	ErrInvalidRequest            APIErrorCode = 4400
 	ErrUnauthorizedAccess        APIErrorCode = 4401
@@ -58,9 +59,9 @@ type ResponsePendingProposals struct {
 
 // ResponseDealRequest is the response payload returned by the .../request_piece/{{PieceCid}} endpoint
 type ResponseDealRequest struct {
-	ReplicationCounts []TenantReplicationCounts `json:"tenant_replication_counts"`
-	DealStartTime     *time.Time                `json:"deal_start_time,omitempty"`
-	DealStartEpoch    *int64                    `json:"deal_start_epoch,omitempty"`
+	ReplicationStates []TenantReplicationState `json:"tenant_replication_states"`
+	DealStartTime     *time.Time               `json:"deal_start_time,omitempty"`
+	DealStartEpoch    *int64                   `json:"deal_start_epoch,omitempty"`
 }
 
 // ResponsePiecesEligible is the response payload returned by the .../eligible_pieces endpoint
@@ -71,26 +72,32 @@ func (ResponseDealRequest) is() isResponsePayload      { return isResponsePayloa
 func (ResponsePiecesEligible) is() isResponsePayload   { return isResponsePayload{} }
 
 type ProposalFailure struct { //nolint:revive
-	Tstamp   time.Time `json:"timestamp"`
-	Err      string    `json:"error"`
-	PieceCid string    `json:"piece_cid"`
-	DealCid  string    `json:"deal_proposal_cid"`
+	ErrorTimeStamp time.Time `json:"timestamp"`
+	Error          string    `json:"error"`
+	PieceCid       string    `json:"piece_cid"`
+	ProposalID     string    `json:"deal_proposal_id"`
+	ProposalCid    *string   `json:"deal_proposal_cid,omitempty"`
+	TenantID       int16     `json:"tenant_id"`
+	TenantClient   string    `json:"tenant_client_id"`
 }
 
 type DealProposal struct { //nolint:revive
-	DealCid        string       `json:"deal_proposal_cid"`
+	ProposalID     string       `json:"deal_proposal_id"`
+	ProposalCid    *string      `json:"deal_proposal_cid,omitempty"`
 	HoursRemaining int          `json:"hours_remaining"`
 	PieceSize      int64        `json:"piece_size"`
 	PieceCid       string       `json:"piece_cid"`
 	TenantID       int16        `json:"tenant_id"`
+	TenantClient   string       `json:"tenant_client_id"`
 	StartTime      time.Time    `json:"deal_start_time"`
 	StartEpoch     int64        `json:"deal_start_epoch"`
-	ImportCMD      string       `json:"sample_import_cmd"`
+	ImportCmd      string       `json:"sample_import_cmd"`
 	Sources        []DataSource `json:"sources,omitempty"`
 }
 
-type TenantReplicationCounts struct { //nolint:revive
-	TenantID int16 `json:"tenant_id"`
+type TenantReplicationState struct { //nolint:revive
+	TenantID     int16   `json:"tenant_id"`
+	TenantClient *string `json:"tenant_client_id"`
 
 	MaxInFlightBytes int64 `json:"tenant_max_in_flight_bytes"`
 	SpInFlightBytes  int64 `json:"actual_in_flight_bytes" db:"cur_in_flight_bytes"`
@@ -107,7 +114,7 @@ type TenantReplicationCounts struct { //nolint:revive
 	InCountry   int16 `json:"actual_within_country"       db:"cur_in_country"`
 	InContinent int16 `json:"actual_within_continent"     db:"cur_in_continent"`
 
-	DealAlreadyExists bool `json:"deal_already_exists"`
+	DealAlreadyExists bool `json:"sp_holds_qualifying_deal"`
 }
 
 type Piece struct { //nolint:revive
@@ -142,18 +149,19 @@ func (s *FilSourceDAG) SrcType() string { return s.SourceType } //nolint:revive
 var _ DataSource = &FilSourceDAG{}
 
 func (s *FilSourceDAG) InitDerivedVals(pieceCid string) error { //nolint:revive
-	s.SourceType = "FilecoinDAG"
-
+	if pieceCid == "" {
+		return fmt.Errorf("supplied PieceCID string can not be empty")
+	}
 	if s.ProviderID == "" || s.OriginalPayloadCid == "" {
 		return fmt.Errorf("filecoin DAG-source object missing mandatory values: %#v", s)
 	}
 
+	s.SourceType = "FilecoinDAG"
 	s.SampleRetrieveCmd = fmt.Sprintf(
-		"lotus client retrieve --provider %s --maxPrice 0 --allow-local --car '%s' $(pwd)/%s__%s.car",
+		"lotus client retrieve --provider %s --maxPrice 0 --allow-local --car '%s' $(pwd)/%s.car",
 		s.ProviderID,
 		s.OriginalPayloadCid,
-		TrimCidString(pieceCid),
-		TrimCidString(s.OriginalPayloadCid),
+		trimCidString(pieceCid),
 	)
 
 	return nil
@@ -164,7 +172,7 @@ const (
 	cidTrimSuffix = 8
 )
 
-func TrimCidString(cs string) string { //nolint:revive
+func trimCidString(cs string) string {
 	if len(cs) <= cidTrimPrefix+cidTrimSuffix+2 {
 		return cs
 	}

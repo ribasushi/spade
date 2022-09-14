@@ -1,19 +1,18 @@
-package common
-
-import (
-	filactor "github.com/filecoin-project/specs-actors/actors/builtin"
-)
+package cmn
 
 //nolint:revive
 const (
-	AppName      = "evergreen-dealer"
-	PromInstance = "dataprogs_evergreen"
+	AppName      = "egd"
+	PromInstance = "dataprogs_egd"
 
 	FilGenesisUnix      = 1598306400
 	FilDefaultLookback  = 10
 	ApiMaxTipsetsBehind = 3 // keep in mind that a nul tipset is indistinguishable from loss of sync - do not set too low
 
-	MaxOutstandingGiB              = int64(4 * 1024)
-	ProposalStartDelayFromMidnight = (72 + 16) * filactor.EpochsInHour
-	ProposalDuration               = 532 * filactor.EpochsInDay
+	ListEligibleDefaultSize = 500
+	ListEligibleMaxSize     = 2 << 20
+
+	ShowRecentFailuresHours = 24
+
+	RequestPieceLockStatement = `SELECT PG_ADVISORY_XACT_LOCK( 1234567890111 )`
 )

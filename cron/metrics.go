@@ -2,16 +2,16 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/filecoin-project/evergreen-dealer/common"
+	cmn "github.com/filecoin-project/evergreen-dealer/common"
 	"github.com/jackc/pgx/v4"
 	"github.com/prometheus/client_golang/prometheus"
 	prometheuspush "github.com/prometheus/client_golang/prometheus/push"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/xerrors"
 )
 
 type metricType string
@@ -209,7 +209,7 @@ var metricsList = []metricSpec{
 	},
 	{
 		kind: metricGauge,
-		name: "dataset_unique_piecebytes_on_chain_evergreen",
+		name: "dataset_unique_piecebytes_on_chain_service",
 		help: "Unique padded piece sizes of entries with at least one active on chain deal per dataset group made by service",
 		query: `
 			WITH
@@ -293,9 +293,9 @@ func pushPrometheusMetrics(cctx *cli.Context) error {
 		workerCount--
 	}
 
-	prom := prometheuspush.New(common.PromURL, common.NonAlphanumRun.ReplaceAllString(common.AppName+"_metrics", "_")).
-		Grouping("instance", common.NonAlphanumRun.ReplaceAllString(common.PromInstance, "_")).
-		BasicAuth(common.PromUser, common.PromPass)
+	prom := prometheuspush.New(cmn.PromURL, cmn.NonAlphanumRun.ReplaceAllString(cmn.AppName+"_metrics", "_")).
+		Grouping("instance", cmn.NonAlphanumRun.ReplaceAllString(cmn.PromInstance, "_")).
+		BasicAuth(cmn.PromUser, cmn.PromPass)
 
 	for _, r := range res {
 		if r.kind == metricCounter {
@@ -309,13 +309,12 @@ func pushPrometheusMetrics(cctx *cli.Context) error {
 			c.Set(float64(r.value))
 			prom.Collector(c)
 		} else {
-			return fmt.Errorf("unknown metric kind '%s'", r.kind)
+			return xerrors.Errorf("unknown metric kind '%s'", r.kind)
 		}
 	}
 
-	err := prom.Push()
-	if err != nil {
-		return err
+	if err := prom.Push(); err != nil {
+		return cmn.WrErr(err)
 	}
 
 	return firstErrorSeen
@@ -337,32 +336,32 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 	if metricsConnStr := cctx.String("pg-metrics-connstring"); metricsConnStr != "" {
 		metricDb, err := pgx.Connect(ctx, metricsConnStr)
 		if err != nil {
-			return nil, err
+			return nil, cmn.WrErr(err)
 		}
 		defer metricDb.Close(context.Background()) //nolint:errcheck
 
 		// separate db - means we can have a connection-wide timeout
 		if _, err = metricDb.Exec(ctx, fmt.Sprintf(`SET statement_timeout = %d`, msecTOut)); err != nil {
-			return nil, err
+			return nil, cmn.WrErr(err)
 		}
 		metricTx, err = metricDb.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 		if err != nil {
-			return nil, err
+			return nil, cmn.WrErr(err)
 		}
 	} else {
 		var err error
-		if metricTx, err = common.Db.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly}); err != nil {
-			return nil, err
+		if metricTx, err = cmn.Db.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly}); err != nil {
+			return nil, cmn.WrErr(err)
 		}
 		// using wider DB - must be tx-local timeout
 		if _, err = metricTx.Exec(ctx, fmt.Sprintf(`SET LOCAL statement_timeout = %d`, msecTOut)); err != nil {
-			return nil, err
+			return nil, cmn.WrErr(err)
 		}
 	}
 
 	rows, err := metricTx.Query(ctx, m.query)
 	if err != nil {
-		return nil, err
+		return nil, cmn.WrErr(err)
 	}
 	defer rows.Close()
 
@@ -372,7 +371,7 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 	}
 
 	if len(colnames) < 1 || len(colnames) > 2 {
-		return nil, fmt.Errorf("unexpected %d columns in resultset", len(colnames))
+		return nil, xerrors.Errorf("unexpected %d columns in resultset", len(colnames))
 	}
 
 	res := make(map[string]*int64)
@@ -380,16 +379,16 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 	if len(colnames) == 1 {
 
 		if !rows.Next() {
-			return nil, errors.New("zero rows in result")
+			return nil, xerrors.New("zero rows in result")
 		}
 
 		var val *int64
 		if err := rows.Scan(&val); err != nil {
-			return nil, err
+			return nil, cmn.WrErr(err)
 		}
 
 		if rows.Next() {
-			return nil, errors.New("unexpectedly received more than one result")
+			return nil, xerrors.New("unexpectedly received more than one result")
 		}
 		res[""] = val
 
@@ -399,14 +398,14 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 			var group string
 			var val *int64
 			if err := rows.Scan(&group, &val); err != nil {
-				return nil, err
+				return nil, cmn.WrErr(err)
 			}
 			res[group] = val
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, cmn.WrErr(err)
 	}
 	took := time.Since(t0).Truncate(time.Millisecond).Seconds()
 
@@ -418,7 +417,7 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 
 		dims := append(
 			make([][2]string, 0, 2),
-			[2]string{"instance", common.NonAlphanumRun.ReplaceAllString(common.PromInstance, "_")},
+			[2]string{"instance", cmn.NonAlphanumRun.ReplaceAllString(cmn.PromInstance, "_")},
 		)
 
 		labels := make(prometheus.Labels)
@@ -431,7 +430,7 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 		if m.kind == metricCounter || m.kind == metricGauge {
 			log.Infow(string(m.kind)+"Evaluated", "name", m.name, "labels", labels, "value", v, "tookSeconds", took)
 		} else {
-			return nil, fmt.Errorf("unknown metric kind '%s'", m.kind)
+			return nil, xerrors.Errorf("unknown metric kind '%s'", m.kind)
 		}
 
 		if v != nil {
@@ -445,7 +444,7 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 			)
 		}
 
-		_, err = common.Db.Exec(
+		_, err = cmn.Db.Exec(
 			ctx,
 			`
 			INSERT INTO metrics
@@ -465,7 +464,7 @@ func gatherMetric(cctx *cli.Context, m metricSpec) ([]metricResult, error) {
 			took,
 		)
 		if err != nil {
-			return nil, err
+			return nil, cmn.WrErr(err)
 		}
 	}
 

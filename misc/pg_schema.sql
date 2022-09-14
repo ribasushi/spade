@@ -1,71 +1,66 @@
-CREATE SCHEMA IF NOT EXISTS evergreen;
+-- Currently there is no schema versioning/manage,ent
+-- This entire script is intended to run against an emoty DB as an initialization step
+-- It is *SAFE* to run it against a live database with existing data
+--
+--   psql service=XYZ < misc/pg_schema.sql
+--
 
-CREATE OR REPLACE FUNCTION
-  evergreen.ts_from_epoch(INTEGER) RETURNS TIMESTAMP WITH TIME ZONE
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT TO_TIMESTAMP( $1 * 30 + 1598306400 )
-$$;
-
-CREATE OR REPLACE FUNCTION
-  evergreen.expiration_cutoff() RETURNS TIMESTAMP WITH TIME ZONE
-LANGUAGE sql PARALLEL RESTRICTED AS $$
-  SELECT DATE_TRUNC( 'day', NOW() + '61 days'::INTERVAL )
-$$;
-
-CREATE OR REPLACE FUNCTION
-  evergreen.continents() RETURNS TABLE ( continent TEXT )
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT * FROM ( VALUES ('af'), ('as'), ('eu'), ('na'), ('oc'), ('sa') ) lst
-$$;
-
-CREATE OR REPLACE FUNCTION
-  evergreen.max_program_replicas() RETURNS INTEGER
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT 10
-$$;
-
-CREATE OR REPLACE FUNCTION
-  evergreen.max_per_city() RETURNS INTEGER
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT 1
-$$;
-
-CREATE OR REPLACE FUNCTION
-  evergreen.max_per_country() RETURNS INTEGER
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT 2
-$$;
-
-CREATE OR REPLACE FUNCTION
-  evergreen.max_per_continent() RETURNS INTEGER
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT 4
-$$;
-
-CREATE OR REPLACE FUNCTION
-  evergreen.max_per_org() RETURNS INTEGER
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT 2
-$$;
-
+CREATE SCHEMA IF NOT EXISTS egd;
 
 CREATE OR REPLACE
-  FUNCTION evergreen.valid_cid_v1(TEXT) RETURNS BOOLEAN
-    LANGUAGE sql IMMUTABLE PARALLEL SAFE
+  FUNCTION egd.big_now() RETURNS BIGINT
+LANGUAGE sql PARALLEL SAFE VOLATILE STRICT AS $$
+  SELECT ( EXTRACT( EPOCH from CLOCK_TIMESTAMP() )::NUMERIC * 1000000000 )::BIGINT
+$$;
+
+CREATE OR REPLACE
+  FUNCTION egd.coarse_epoch(INTEGER) RETURNS INTEGER
+LANGUAGE sql PARALLEL SAFE IMMUTABLE STRICT AS $$
+  -- round down to the nearest week
+  SELECT ( $1 / ( 7 * 2880 ) )::INTEGER * 7 * 2880
+$$;
+
+CREATE OR REPLACE
+  FUNCTION egd.ts_from_epoch(INTEGER) RETURNS TIMESTAMP WITH TIME ZONE
+LANGUAGE sql PARALLEL SAFE IMMUTABLE STRICT AS $$
+  SELECT TIMEZONE( 'UTC', TO_TIMESTAMP( $1 * 30::BIGINT + 1598306400 ) )
+$$;
+
+CREATE OR REPLACE
+  FUNCTION egd.epoch_from_ts(TIMESTAMP WITH TIME ZONE) RETURNS INTEGER
+LANGUAGE sql PARALLEL SAFE IMMUTABLE STRICT AS $$
+  SELECT ( EXTRACT( EPOCH FROM $1 )::BIGINT - 1598306400 ) / 30
+$$;
+
+CREATE OR REPLACE
+  FUNCTION egd.replica_expiration_cutoff_epoch() RETURNS INTEGER
+LANGUAGE sql PARALLEL RESTRICTED STABLE AS $$
+  SELECT egd.epoch_from_ts( DATE_TRUNC( 'day', NOW() + '45 days'::INTERVAL ) )
+$$;
+
+CREATE OR REPLACE
+  FUNCTION egd.proposal_deduplication_recent_cutoff_epoch() RETURNS INTEGER
+LANGUAGE sql PARALLEL RESTRICTED STABLE AS $$
+  SELECT egd.epoch_from_ts( DATE_TRUNC( 'hour', NOW() - '1 days'::INTERVAL ) )
+$$;
+
+CREATE OR REPLACE
+  FUNCTION egd.valid_cid_v1(TEXT) RETURNS BOOLEAN
+    LANGUAGE sql PARALLEL SAFE IMMUTABLE STRICT
 AS $$
   SELECT SUBSTRING( $1 FROM 1 FOR 2 ) = 'ba'
 $$;
 
 CREATE OR REPLACE
-  FUNCTION evergreen.valid_cid(TEXT) RETURNS BOOLEAN
-    LANGUAGE sql IMMUTABLE PARALLEL SAFE
+  FUNCTION egd.valid_cid(TEXT) RETURNS BOOLEAN
+    LANGUAGE sql PARALLEL SAFE IMMUTABLE STRICT
 AS $$
   SELECT ( SUBSTRING( $1 FROM 1 FOR 2 ) = 'ba' OR SUBSTRING( $1 FROM 1 FOR 2 ) = 'Qm' )
 $$;
 
 
 CREATE OR REPLACE
-  FUNCTION evergreen.update_entry_timestamp() RETURNS TRIGGER
+  FUNCTION egd.update_entry_timestamp() RETURNS TRIGGER
     LANGUAGE plpgsql
 AS $$
 BEGIN
@@ -75,659 +70,1985 @@ END;
 $$;
 
 CREATE OR REPLACE
-  FUNCTION evergreen.record_metric_change() RETURNS TRIGGER
+  FUNCTION egd.record_metric_change() RETURNS TRIGGER
     LANGUAGE plpgsql
 AS $$
 BEGIN
-  INSERT INTO evergreen.metrics_log ( name, dimensions, value, collected_at, collection_took_seconds ) VALUES ( NEW.name, NEW.dimensions, NEW.value, NEW.collected_at, NEW.collection_took_seconds );
+  INSERT INTO egd.metrics_log ( name, dimensions, value, collected_at, collection_took_seconds ) VALUES ( NEW.name, NEW.dimensions, NEW.value, NEW.collected_at, NEW.collection_took_seconds );
   RETURN NULL;
 END;
 $$;
 
 
-CREATE OR REPLACE
-  FUNCTION evergreen.init_deal_related_actors() RETURNS TRIGGER
-    LANGUAGE plpgsql
-AS $$
-BEGIN
-  INSERT INTO evergreen.clients( client_id ) VALUES ( NEW.client_id ) ON CONFLICT DO NOTHING;
-  INSERT INTO evergreen.providers( provider_id ) VALUES ( NEW.provider_id ) ON CONFLICT DO NOTHING;
-  RETURN NEW;
-END;
-$$;
-
-CREATE OR REPLACE
-  FUNCTION evergreen.init_authed_sp() RETURNS TRIGGER
-    LANGUAGE plpgsql
-AS $$
-BEGIN
-  INSERT INTO evergreen.providers( provider_id ) VALUES ( NEW.provider_id ) ON CONFLICT DO NOTHING;
-  RETURN NEW;
-END;
-$$;
-
-
-CREATE TABLE IF NOT EXISTS evergreen.datasets (
-  dataset_id SMALLSERIAL NOT NULL UNIQUE,
-  dataset_slug TEXT NOT NULL UNIQUE,
-  meta JSONB
-);
-
-CREATE TABLE IF NOT EXISTS evergreen.pieces (
-  piece_cid TEXT NOT NULL UNIQUE CONSTRAINT valid_pcid CHECK ( evergreen.valid_cid_v1( piece_cid ) ),
-  dataset_id SMALLINT NOT NULL REFERENCES evergreen.datasets ( dataset_id ),
-  padded_size BIGINT NOT NULL CONSTRAINT valid_size CHECK ( padded_size > 0 ),
-  meta JSONB
-);
-CREATE INDEX IF NOT EXISTS pieces_dataset_id_idx ON evergreen.pieces ( dataset_id );
-CREATE INDEX IF NOT EXISTS pieces_padded_size_idx ON evergreen.pieces ( padded_size );
-
-CREATE TABLE IF NOT EXISTS evergreen.payloads (
-  piece_cid TEXT NOT NULL REFERENCES evergreen.pieces ( piece_cid ),
-  payload_cid TEXT NOT NULL CONSTRAINT valid_rcid CHECK ( evergreen.valid_cid( payload_cid ) ),
-  CONSTRAINT payload_piece UNIQUE ( payload_cid, piece_cid ),
-  CONSTRAINT temp_single_root UNIQUE ( piece_cid ),
-  meta JSONB
-);
-
-CREATE TABLE IF NOT EXISTS evergreen.clients (
-  client_id TEXT UNIQUE NOT NULL CONSTRAINT valid_id CHECK ( SUBSTRING( client_id FROM 1 FOR 2 ) IN ( 'f0', 't0' ) ),
-  activateable_datacap BIGINT,
-  is_affiliated BOOL NOT NULL DEFAULT false,
-  client_address TEXT UNIQUE CONSTRAINT valid_client_address CHECK ( SUBSTRING( client_address FROM 1 FOR 2 ) IN ( 'f1', 'f3', 't1', 't3' ) ),
-  meta JSONB,
-  CONSTRAINT robust_affiliate CHECK (
-    NOT is_affiliated
-      OR
-    client_address IS NOT NULL
-  )
-);
-CREATE INDEX IF NOT EXISTS affiliated_clients ON evergreen.clients ( client_id ) WHERE is_affiliated;
-
-CREATE TABLE IF NOT EXISTS evergreen.providers (
-  provider_id TEXT NOT NULL UNIQUE CONSTRAINT valid_id CHECK ( SUBSTRING( provider_id FROM 1 FOR 2 ) IN ( 'f0', 't0' ) ),
-  is_active BOOL NOT NULL DEFAULT false,
-  meta JSONB,
-  org_id TEXT NOT NULL DEFAULT '',
-  city TEXT NOT NULL DEFAULT '',
-  country TEXT NOT NULL DEFAULT '',
-  continent TEXT NOT NULL DEFAULT '',
-  CONSTRAINT valid_activation CHECK (
-    ( NOT is_active )
-     OR
-    ( org_id != '' AND city != '' AND country != '' AND continent != '' )
-  )
-);
-
-CREATE UNLOGGED TABLE IF NOT EXISTS evergreen.requests (
-  provider_id TEXT NOT NULL REFERENCES evergreen.providers ( provider_id ),
-  request_uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
-  entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  request_dump JSONB NOT NULL,
-  meta JSONB
-);
-CREATE TRIGGER trigger_create_related_sp
-  BEFORE INSERT ON evergreen.requests
-  FOR EACH ROW
-  EXECUTE PROCEDURE evergreen.init_authed_sp()
-;
-
-
-CREATE TABLE IF NOT EXISTS evergreen.published_deals (
-  deal_id BIGINT UNIQUE NOT NULL CONSTRAINT valid_id CHECK ( deal_id > 0 ),
-  piece_cid TEXT NOT NULL REFERENCES evergreen.pieces ( piece_cid ),
-  provider_id TEXT NOT NULL REFERENCES evergreen.providers ( provider_id ),
-  client_id TEXT NOT NULL REFERENCES evergreen.clients ( client_id ),
-  label BYTEA NOT NULL,
-  decoded_label TEXT CONSTRAINT valid_label_cid CHECK ( evergreen.valid_cid( decoded_label ) ),
-  is_filplus BOOL NOT NULL,
-  status TEXT NOT NULL,
-  meta JSONB,
-  start_epoch INTEGER NOT NULL CONSTRAINT valid_start CHECK ( start_epoch > 0 ),
-  start_time TIMESTAMP WITH TIME ZONE NOT NULL GENERATED ALWAYS AS ( evergreen.ts_from_epoch( start_epoch ) ) STORED,
-  end_epoch INTEGER NOT NULL CONSTRAINT valid_end CHECK ( end_epoch > 0 ),
-  end_time TIMESTAMP WITH TIME ZONE NOT NULL GENERATED ALWAYS AS ( evergreen.ts_from_epoch( end_epoch ) ) STORED,
-  sector_start_epoch INTEGER CONSTRAINT valid_sector_start CHECK ( sector_start_epoch > 0 ),
-  sector_start_time TIMESTAMP WITH TIME ZONE GENERATED ALWAYS AS ( evergreen.ts_from_epoch( sector_start_epoch ) ) STORED,
-  termination_detection_time TIMESTAMP WITH TIME ZONE,
-  entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  CONSTRAINT valid_termination_record CHECK ( (status = 'terminated') = (termination_detection_time IS NOT NULL) )
-);
-CREATE TRIGGER trigger_create_related_actors
-  BEFORE INSERT ON evergreen.published_deals
-  FOR EACH ROW
-  EXECUTE PROCEDURE evergreen.init_deal_related_actors()
-;
-CREATE INDEX IF NOT EXISTS published_deals_piece_cid ON evergreen.published_deals ( piece_cid );
-CREATE INDEX IF NOT EXISTS published_deals_client ON evergreen.published_deals ( client_id );
-CREATE INDEX IF NOT EXISTS published_deals_provider ON evergreen.published_deals ( provider_id );
-CREATE INDEX IF NOT EXISTS published_deals_status ON evergreen.published_deals ( status, is_filplus, piece_cid );
-CREATE INDEX IF NOT EXISTS published_deals_sector_started ON evergreen.published_deals ( sector_start_epoch );
-
-
-CREATE TABLE IF NOT EXISTS evergreen.proposals (
-  piece_cid TEXT NOT NULL REFERENCES evergreen.pieces ( piece_cid ),
-  provider_id TEXT NOT NULL REFERENCES evergreen.providers ( provider_id ),
-  client_id TEXT NOT NULL REFERENCES evergreen.clients ( client_id ),
-
-  dealstart_payload JSONB,
-
-  proposal_success_cid TEXT UNIQUE CONSTRAINT valid_proposal_cid CHECK ( evergreen.valid_cid_v1(proposal_success_cid) ),
-  proposal_failstamp BIGINT NOT NULL DEFAULT 0 CONSTRAINT valid_failstamp CHECK ( proposal_failstamp >= 0 ),
-
-  activated_deal_id BIGINT UNIQUE REFERENCES evergreen.published_deals ( deal_id ),
-  meta JSONB,
-
-  entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  entry_last_updated TIMESTAMP WITH TIME ZONE NOT NULL,
-  CONSTRAINT singleton_piece_record UNIQUE ( provider_id, piece_cid, proposal_failstamp ),
-  CONSTRAINT annotated_failure CHECK ( (proposal_failstamp = 0) = (meta->'failure' IS NULL) )
-);
-CREATE TRIGGER trigger_proposal_update_ts
-  BEFORE INSERT OR UPDATE ON evergreen.proposals
-  FOR EACH ROW
-  EXECUTE PROCEDURE evergreen.update_entry_timestamp()
-;
-CREATE INDEX IF NOT EXISTS proposals_client_idx ON evergreen.proposals ( client_id );
-CREATE INDEX IF NOT EXISTS proposals_provider_idx ON evergreen.proposals ( provider_id );
-CREATE INDEX IF NOT EXISTS proposals_piece_idx ON evergreen.proposals ( piece_cid );
-
-CREATE TABLE IF NOT EXISTS evergreen.metrics (
-  name TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS egd.metrics (
+  name TEXT NOT NULL CONSTRAINT metric_name_lc CHECK ( name ~ '^[a-z0-9_]+$' ),
   dimensions TEXT[][] NOT NULL,
   description TEXT NOT NULL,
   value BIGINT,
   collected_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CLOCK_TIMESTAMP(),
   collection_took_seconds NUMERIC NOT NULL,
-  CONSTRAINT metric UNIQUE ( name, dimensions )
+  CONSTRAINT metric_uidx UNIQUE ( name, dimensions )
 );
-CREATE TRIGGER trigger_store_metric_logs
-  AFTER INSERT OR UPDATE ON evergreen.metrics
+CREATE OR REPLACE TRIGGER trigger_store_metric_logs
+  AFTER INSERT OR UPDATE ON egd.metrics
   FOR EACH ROW
-  EXECUTE PROCEDURE evergreen.record_metric_change()
+  EXECUTE PROCEDURE egd.record_metric_change()
 ;
-
-CREATE TABLE IF NOT EXISTS evergreen.metrics_log (
+CREATE TABLE IF NOT EXISTS egd.metrics_log (
   name TEXT NOT NULL,
   dimensions TEXT[][] NOT NULL,
   value BIGINT,
   collected_at TIMESTAMP WITH TIME ZONE NOT NULL,
-  collection_took_seconds NUMERIC NOT NULL
+  collection_took_seconds NUMERIC NOT NULL,
+  CONSTRAINT metrics_log_metric_fk FOREIGN KEY ( name, dimensions ) REFERENCES egd.metrics ( name, dimensions )
 );
-CREATE INDEX IF NOT EXISTS metrics_log_collected_name_dim ON evergreen.metrics_log ( collected_at, name );
+CREATE INDEX IF NOT EXISTS metrics_log_collected_name_dim ON egd.metrics_log ( collected_at, name );
+
+CREATE TABLE IF NOT EXISTS egd.global(
+  singleton_row BOOL NOT NULL UNIQUE CONSTRAINT single_row_in_table CHECK ( singleton_row IS TRUE ),
+  metadata JSONB NOT NULL
+);
+INSERT INTO egd.global ( singleton_row, metadata ) VALUES ( true, '{ "schema_version":{ "major": 1, "minor": 0 } }' ) ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS egd.tenants (
+  tenant_id SMALLSERIAL NOT NULL UNIQUE,
+  tenant_name TEXT NOT NULL UNIQUE,
+  tenant_meta JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS egd.datasets (
+  dataset_id SMALLSERIAL NOT NULL UNIQUE,
+  dataset_slug TEXT NOT NULL UNIQUE CONSTRAINT dataset_slug_lc CHECK ( dataset_slug ~ '^[a-z0-9\-]+$' ),
+  dataset_meta JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS egd.tenants_datasets (
+  tenant_id SMALLINT NOT NULL REFERENCES egd.tenants ( tenant_id ) ON UPDATE CASCADE,
+  dataset_id SMALLINT NOT NULL REFERENCES egd.datasets ( dataset_id ) ON UPDATE CASCADE,
+  tenant_dataset_meta JSONB NOT NULL DEFAULT '{}',
+  CONSTRAINT tenants_datasets_singleton UNIQUE ( tenant_id, dataset_id )
+);
+
+CREATE TABLE IF NOT EXISTS egd.pieces (
+  piece_id BIGINT NOT NULL UNIQUE,
+  piece_cid TEXT NOT NULL UNIQUE CONSTRAINT piece_valid_pcid CHECK ( egd.valid_cid_v1( piece_cid ) ),
+  piece_log2_size SMALLINT NOT NULL CONSTRAINT piece_valid_size CHECK ( piece_log2_size > 0 ),
+  proposal_label TEXT CONSTRAINT piece_valid_lcid CHECK ( egd.valid_cid( proposal_label ) ),
+  piece_meta JSONB NOT NULL DEFAULT '{}',
+  CONSTRAINT pieces_piece_size_key UNIQUE ( piece_id, piece_log2_size ), -- needed for the proposals FK
+  CONSTRAINT pieces_piece_cid_size_key UNIQUE ( piece_log2_size, piece_id, piece_cid ) -- needed for the published_deals FK
+);
+CREATE OR REPLACE
+  FUNCTION egd.prefill_piece_id() RETURNS TRIGGER
+    LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.piece_id = ( SELECT COALESCE( MIN( piece_id ), 0 ) - 1 FROM egd.pieces );
+  RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER trigger_fill_next_piece_id
+  BEFORE INSERT ON egd.pieces
+  FOR EACH ROW
+  WHEN ( NEW.piece_id IS NULL )
+  EXECUTE PROCEDURE egd.prefill_piece_id()
+;
 
 
-CREATE OR REPLACE VIEW evergreen.clients_datacap_available AS
+CREATE TABLE IF NOT EXISTS egd.datasets_pieces (
+  piece_id BIGINT NOT NULL REFERENCES egd.pieces ( piece_id ) ON UPDATE CASCADE,
+  dataset_id SMALLINT NOT NULL REFERENCES egd.datasets ( dataset_id ) ON UPDATE CASCADE,
+  dataset_piece_meta JSONB NOT NULL DEFAULT '{}',
+  CONSTRAINT datasets_pieces_singleton UNIQUE ( piece_id, dataset_id )
+);
+
+CREATE TABLE IF NOT EXISTS egd.clients (
+  client_id INTEGER UNIQUE NOT NULL,
+  tenant_id SMALLINT REFERENCES egd.tenants ( tenant_id ) ON UPDATE CASCADE,
+  client_address TEXT UNIQUE CONSTRAINT client_valid_address CHECK ( SUBSTRING( client_address FROM 1 FOR 2 ) IN ( 'f1', 'f3', 't1', 't3' ) ),
+  client_meta JSONB NOT NULL DEFAULT '{}',
+  CONSTRAINT tenant_has_robust CHECK (
+    tenant_id IS NULL
+      OR
+    client_address IS NOT NULL
+  )
+);
+CREATE INDEX IF NOT EXISTS clients_tenant_idx ON egd.clients ( tenant_id );
+
+CREATE TABLE IF NOT EXISTS egd.providers (
+  provider_id INTEGER UNIQUE NOT NULL,
+  org_id SMALLINT NOT NULL DEFAULT 0,
+  city_id SMALLINT NOT NULL DEFAULT 0,
+  country_id SMALLINT NOT NULL DEFAULT 0,
+  continent_id  SMALLINT NOT NULL DEFAULT 0,
+  sector_log2_size SMALLINT NOT NULL DEFAULT 0,
+  can_seal_64g_sectors BOOL NOT NULL GENERATED ALWAYS AS ( sector_log2_size >= 36 ) STORED,
+  provider_meta JSONB NOT NULL DEFAULT '{}',
+  CONSTRAINT consistent_metadata CHECK (
+    ( org_id = 0 AND city_id = 0 AND country_id = 0 AND continent_id = 0 AND sector_log2_size = 0 )
+      OR
+    ( org_id > 0 AND city_id > 0 AND country_id > 0 AND continent_id > 0 AND sector_log2_size > 0 )
+  )
+);
+
+CREATE TABLE IF NOT EXISTS egd.tenants_providers (
+  provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
+  tenant_id SMALLINT NOT NULL REFERENCES egd.tenants ( tenant_id ) ON UPDATE CASCADE,
+  tenant_provider_meta JSONB NOT NULL DEFAULT '{}',
+  CONSTRAINT tenants_providers_singleton UNIQUE ( tenant_id, provider_id )
+);
+
+
+CREATE TABLE IF NOT EXISTS egd.requests (
+  provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
+  request_uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
+  entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  request_dump JSONB NOT NULL,
+  request_meta JSONB NOT NULL DEFAULT '{}'
+);
+CREATE OR REPLACE
+  FUNCTION egd.init_authed_sp() RETURNS TRIGGER
+    LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO egd.providers( provider_id ) VALUES ( NEW.provider_id ) ON CONFLICT DO NOTHING;
+  RETURN NEW;
+END;
+$$;
+CREATE OR REPLACE TRIGGER trigger_create_related_sp
+  BEFORE INSERT ON egd.requests
+  FOR EACH ROW
+  EXECUTE PROCEDURE egd.init_authed_sp()
+;
+
+
+CREATE TABLE IF NOT EXISTS egd.published_deals (
+  deal_id BIGINT UNIQUE NOT NULL CONSTRAINT deal_valid_id CHECK ( deal_id > 0 ),
+  piece_id BIGINT NOT NULL,
+  piece_cid TEXT NOT NULL,
+  piece_log2_size BIGINT NOT NULL CONSTRAINT piece_valid_size CHECK ( piece_log2_size > 0 ),
+  provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
+  client_id INTEGER NOT NULL REFERENCES egd.clients ( client_id ),
+  label BYTEA NOT NULL,
+  decoded_label TEXT CONSTRAINT deal_valid_label_cid CHECK ( egd.valid_cid( decoded_label ) ),
+  is_filplus BOOL NOT NULL,
+  status TEXT NOT NULL,
+  published_deal_meta JSONB NOT NULL DEFAULT '{}',
+  start_epoch INTEGER NOT NULL CONSTRAINT deal_valid_start CHECK ( start_epoch > 0 ),
+  end_epoch INTEGER NOT NULL CONSTRAINT deal_valid_end CHECK ( end_epoch > 0 ),
+  sector_start_epoch INTEGER CONSTRAINT deal_valid_sector_start CHECK ( sector_start_epoch > 0 ),
+  entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  CONSTRAINT piece_combo_fkey FOREIGN KEY ( piece_log2_size, piece_id, piece_cid ) REFERENCES egd.pieces ( piece_log2_size, piece_id, piece_cid ) ON UPDATE CASCADE
+);
+CREATE INDEX IF NOT EXISTS published_deals_piece_id_idx ON egd.published_deals ( piece_id );
+CREATE INDEX IF NOT EXISTS published_deals_status ON egd.published_deals ( status, piece_id, is_filplus, provider_id );
+CREATE INDEX IF NOT EXISTS published_deals_fildag ON egd.published_deals ( piece_id ) WHERE (
+    status = 'active'
+      AND
+    decoded_label IS NOT NULL
+      AND
+    decoded_label NOT LIKE 'baga6ea4sea%'
+);
+CREATE INDEX IF NOT EXISTS published_deals_live ON egd.published_deals ( piece_id ) WHERE ( status != 'terminated' );
+
+CREATE OR REPLACE
+  FUNCTION egd.init_deal_relations() RETURNS TRIGGER
+    LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO egd.clients( client_id ) VALUES ( NEW.client_id ) ON CONFLICT DO NOTHING;
+  INSERT INTO egd.providers( provider_id ) VALUES ( NEW.provider_id ) ON CONFLICT DO NOTHING;
+  IF NEW.piece_id IS NULL THEN
+    INSERT INTO egd.pieces( piece_cid, piece_log2_size ) VALUES ( NEW.piece_cid, NEW.piece_log2_size ) ON CONFLICT DO NOTHING;
+    NEW.piece_id = ( SELECT piece_id FROM egd.pieces WHERE piece_cid = NEW.piece_cid );
+  END IF;
+  RETURN NEW;
+ END;
+ $$;
+CREATE OR REPLACE TRIGGER trigger_init_deal_relations
+  BEFORE INSERT ON egd.published_deals
+  FOR EACH ROW
+  EXECUTE PROCEDURE egd.init_deal_relations()
+;
+
+CREATE TABLE IF NOT EXISTS egd.invalidated_deals (
+  deal_id BIGINT NOT NULL UNIQUE REFERENCES egd.published_deals ( deal_id ),
+  invalidation_meta JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS egd.proposals (
+  proposal_uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
+  piece_id BIGINT NOT NULL,
+
+  entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  signature_obtained TIMESTAMP WITH TIME ZONE,
+  proposal_delivered TIMESTAMP WITH TIME ZONE,
+  activated_deal_id BIGINT UNIQUE REFERENCES egd.published_deals ( deal_id ),
+  proposal_failstamp BIGINT NOT NULL DEFAULT 0 CONSTRAINT proposal_valid_failstamp CHECK ( proposal_failstamp >= 0 ),
+  entry_last_updated TIMESTAMP WITH TIME ZONE NOT NULL,
+
+  provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
+  client_id INTEGER NOT NULL REFERENCES egd.clients ( client_id ),
+
+  start_epoch INTEGER NOT NULL,
+  end_epoch INTEGER NOT NULL,
+
+  piece_log2_size SMALLINT NOT NULL,
+
+  proposal_meta JSONB NOT NULL DEFAULT '{}',
+
+  CONSTRAINT proposal_piece_combo_fkey FOREIGN KEY ( piece_id, piece_log2_size ) REFERENCES egd.pieces ( piece_id, piece_log2_size ) ON UPDATE CASCADE,
+  CONSTRAINT proposal_singleton_pending_piece UNIQUE ( provider_id, piece_id, proposal_failstamp ),
+  CONSTRAINT proposal_annotated_failure CHECK ( (proposal_failstamp = 0) = (proposal_meta->'failure' IS NULL) )
+);
+CREATE OR REPLACE TRIGGER trigger_proposal_update_ts
+  BEFORE INSERT OR UPDATE ON egd.proposals
+  FOR EACH ROW
+  EXECUTE PROCEDURE egd.update_entry_timestamp()
+;
+CREATE INDEX IF NOT EXISTS proposals_piece_idx ON egd.proposals ( piece_id );
+CREATE INDEX IF NOT EXISTS proposals_pending ON egd.proposals ( piece_id, provider_id, client_id ) INCLUDE ( piece_log2_size ) WHERE ( proposal_failstamp = 0 AND activated_deal_id IS NULL );
+
+-- Used exclusively for the `FilecoinDAG` portion of a response and corresponding availability matview
+CREATE OR REPLACE VIEW egd.known_fildag_deals_ranked AS (
+  SELECT
+      piece_id,
+      deal_id,
+      end_epoch,
+      provider_id,
+      is_filplus,
+      decoded_label AS proposal_label,
+      ( ROW_NUMBER() OVER (
+        PARTITION BY piece_id, provider_id
+        ORDER BY
+          is_filplus DESC,
+          end_epoch DESC,
+          deal_id
+      ) ) AS rank
+    FROM egd.published_deals pd
+    LEFT JOIN egd.invalidated_deals USING ( deal_id )
+  WHERE
+    invalidated_deals.deal_id IS NULL
+      AND
+    status = 'active'
+      AND
+    decoded_label IS NOT NULL
+      AND
+    decoded_label NOT LIKE 'baga6ea4sea%'
+);
+
+CREATE OR REPLACE VIEW egd.clients_datacap_available AS
   SELECT
     c.client_id,
     c.client_address,
+    c.tenant_id,
     (
-      c.activateable_datacap
+      COALESCE(
+        (c.client_meta->'activatable_datacap')::BIGINT,
+        0
+      )
         -
       COALESCE(
         (
-        SELECT SUM( (dealstart_payload->'Data'->'PieceSize')::BIGINT / 127 * 128)
-          FROM proposals p
+        SELECT SUM( 1::BIGINT << pr.piece_log2_size )
+          FROM egd.proposals pr
         WHERE
-          p.proposal_failstamp = 0
+          pr.proposal_failstamp = 0
             AND
-          p.activated_deal_id IS NULL
+          pr.activated_deal_id IS NULL
             AND
-          p.client_id = c.client_id
-        ),
+          pr.client_id = c.client_id
+        )::BIGINT,
         0
       )
     ) AS datacap_available
-  FROM clients c
-  WHERE c.is_affiliated
-  ORDER BY datacap_available
+  FROM egd.clients c
+  WHERE c.tenant_id IS NOT NULL
+  ORDER BY c.tenant_id, datacap_available DESC
 ;
 
-BEGIN;
-DROP VIEW IF EXISTS frontpage_stats_v0;
-DROP VIEW IF EXISTS deallist_v0;
-DROP MATERIALIZED VIEW IF EXISTS replica_counts;
-DROP MATERIALIZED VIEW IF EXISTS deallist_eligible;
-DROP MATERIALIZED VIEW IF EXISTS known_org_ids;
-DROP MATERIALIZED VIEW IF EXISTS known_cities;
-DROP MATERIALIZED VIEW IF EXISTS known_countries;
-DROP MATERIALIZED VIEW IF EXISTS known_continents;
-
-CREATE MATERIALIZED VIEW deallist_eligible AS (
+-- backing virtually all of the functions/materialized views below
+-- FIXME: for now it must be a live view as it backs piece_realtime_eligibility(), separate live and tracked parts
+CREATE OR REPLACE VIEW egd.known_deals_ranked AS (
   WITH
-    pieces_for_refresh AS (
-      SELECT
-          pi.piece_cid,
-          pi.padded_size,
-          ds.dataset_slug
-        FROM evergreen.pieces pi
-        LEFT JOIN datasets ds USING ( dataset_id )
-      WHERE
-        NOT COALESCE( (pi.meta->'inactive')::BOOL, false )
-          AND
-        -- there needs to be at least one active deal ( anywhere )
-        EXISTS (
-          SELECT 42
-            FROM evergreen.published_deals d0
-          WHERE
-            d0.piece_cid = pi.piece_cid
-              AND
-            d0.status = 'active'
-              AND
-            NOT COALESCE( (d0.meta->'inactive')::BOOL, false )
-        )
-          AND
-        -- fewer than program-allowed total not-yet-expiring replicas ( not counting our proposals )
-        max_program_replicas() > (
-          SELECT COUNT(DISTINCT( d1.provider_id ))
-            FROM evergreen.published_deals d1
-            JOIN evergreen.clients c USING ( client_id )
-          WHERE
-            d1.piece_cid = pi.piece_cid
-              AND
-            d1.is_filplus
-              AND
-            d1.status = 'active'
-              AND
-            NOT COALESCE( (d1.meta->'inactive')::BOOL, false )
-              AND
-            d1.end_time > expiration_cutoff()
-        )
-    ),
-    deallist_with_dupes AS (
-      SELECT
-          d.deal_id,
-          pfr.dataset_slug,
-          pfr.piece_cid,
-          pfr.padded_size,
-          (
-            CASE WHEN d.decoded_label = pl.payload_cid THEN CONVERT_FROM(d.label,'UTF-8') ELSE pl.payload_cid END
-          ) AS original_payload_cid,
-          pl.payload_cid AS normalized_payload_cid,
-          d.status,
-          d.provider_id,
-          c.client_address,
-          d.is_filplus,
-          d.start_epoch,
-          d.start_time,
-          d.end_epoch,
-          d.end_time,
-          ( RANK() OVER ( PARTITION BY pfr.piece_cid, d.provider_id ORDER BY d.is_filplus DESC, d.end_time DESC, d.deal_id ) ) AS sp_best_deal_rank
-        FROM pieces_for_refresh pfr
-        JOIN evergreen.payloads pl USING ( piece_cid )
-        JOIN evergreen.published_deals d USING ( piece_cid )
-        JOIN evergreen.clients c USING ( client_id )
-      WHERE
-        d.status = 'active'
-          AND
-        NOT COALESCE( (d.meta->'inactive')::BOOL, false )
+    cutoff AS MATERIALIZED (
+      SELECT egd.replica_expiration_cutoff_epoch() AS epoch
     )
   SELECT
-      d.deal_id,
-      d.dataset_slug,
-      d.piece_cid,
-      d.padded_size,
-      d.original_payload_cid,
-      d.normalized_payload_cid,
-      d.status,
-      d.start_epoch,
-      d.start_time,
-      d.end_epoch,
-      d.end_time,
-      d.client_address,
-      d.is_filplus,
-      d.provider_id,
-      pr.org_id,
-      pr.city,
-      pr.country,
-      pr.continent
-    FROM deallist_with_dupes d
-    JOIN evergreen.providers pr USING ( provider_id )
-  WHERE sp_best_deal_rank = 1
+      intra_sp_rank,
+      deal_id,
+      piece_id,
+      provider_id,
+      client_id,
+      end_epoch,
+      state,
+      is_filplus,
+      proposal_label,
+      ( SELECT ARRAY_AGG(DISTINCT id) FROM UNNEST( claimant_ids ) t(id) ) AS claimant_ids -- can not do this below: unsupported in ARRAY_AGG ... OVER
+    FROM (
+      SELECT
+        pub_and_prop.*,
+        ( ARRAY_AGG( COALESCE( c.tenant_id, - c.client_id )::INTEGER ) OVER ( PARTITION BY piece_id, provider_id ) ) AS claimant_ids,
+        ( ROW_NUMBER() OVER (
+          PARTITION BY piece_id, provider_id
+          ORDER BY
+            ( end_epoch >= cutoff.epoch ) DESC, -- favor not-yet-expiring deals early on
+            state DESC,
+            ( c.tenant_id IS NOT NULL ) DESC, -- rank any known tenant first
+            is_filplus DESC,
+            end_epoch DESC,
+            deal_id DESC NULLS LAST,
+            c.client_id
+        ) ) AS intra_sp_rank
+
+      FROM (
+        (
+          SELECT
+              pd.deal_id,
+              pd.piece_id,
+              pd.provider_id,
+              pd.client_id,
+              pd.end_epoch,
+              ( CASE WHEN pd.status = 'active' THEN 4::"char" ELSE 3::"char" END ) AS state,
+              pd.is_filplus,
+              pd.decoded_label AS proposal_label
+            FROM egd.published_deals pd
+            LEFT JOIN egd.invalidated_deals USING ( deal_id )
+          WHERE
+            invalidated_deals.deal_id IS NULL
+              AND
+            pd.status != 'terminated'
+        )
+
+        UNION ALL
+
+        (
+          SELECT
+              NULL AS deal_id,
+              pr.piece_id,
+              pr.provider_id,
+              pr.client_id,
+              pr.end_epoch,
+              ( CASE WHEN pr.proposal_delivered IS NOT NULL THEN 2::"char" ELSE 1::"char" END ) AS state, -- proposed / accepted but not yet chain-published
+              true AS is_filplus, -- we do not propose non-filplus
+              p.proposal_label
+            FROM egd.proposals pr
+            JOIN egd.pieces p USING ( piece_id )
+            LEFT JOIN egd.published_deals pd
+              ON
+                pd.piece_id = pr.piece_id
+                  AND
+                pd.provider_id = pr.provider_id
+                  AND
+                pd.client_id = pr.client_id
+                  AND
+                pd.is_filplus
+                  AND
+                pd.status = 'published'
+          WHERE
+            pd.piece_id IS NULL
+              AND
+            pr.proposal_failstamp = 0
+              AND
+            pr.activated_deal_id IS NULL
+        )
+      ) pub_and_prop, egd.clients c, cutoff
+    WHERE
+      pub_and_prop.client_id = c.client_id
+  ) fin
 );
-CREATE UNIQUE INDEX deallist_eligible_deal_id ON evergreen.deallist_eligible ( deal_id );
-CREATE INDEX deallist_eligible_piece_cid ON evergreen.deallist_eligible ( piece_cid );
-CREATE INDEX deallist_eligible_original_payload_cid ON evergreen.deallist_eligible ( original_payload_cid );
-CREATE INDEX deallist_eligible_normalized_payload_cid ON evergreen.deallist_eligible ( normalized_payload_cid );
-CREATE INDEX deallist_eligible_padded_size ON evergreen.deallist_eligible ( padded_size );
-CREATE INDEX deallist_eligible_provider_id ON evergreen.deallist_eligible ( provider_id );
-CREATE INDEX deallist_eligible_is_filplus ON evergreen.deallist_eligible ( is_filplus );
-CREATE INDEX deallist_eligible_start_time ON evergreen.deallist_eligible ( start_time );
-CREATE INDEX deallist_eligible_end_time ON evergreen.deallist_eligible ( end_time );
-CREATE INDEX deallist_eligible_org_id ON evergreen.deallist_eligible ( org_id );
-CREATE INDEX deallist_eligible_city ON evergreen.deallist_eligible ( city );
-CREATE INDEX deallist_eligible_country ON evergreen.deallist_eligible ( country );
-CREATE INDEX deallist_eligible_continent ON evergreen.deallist_eligible ( continent );
-ANALYZE evergreen.deallist_eligible;
 
+BEGIN;
 
-CREATE MATERIALIZED VIEW known_org_ids AS ( SELECT DISTINCT( org_id ) FROM providers WHERE org_id != '' );
-CREATE UNIQUE INDEX known_org_ids_key ON evergreen.known_org_ids ( org_id );
-ANALYZE known_org_ids;
+DROP FUNCTION IF EXISTS egd.pieces_eligible_head;
+DROP FUNCTION IF EXISTS egd.pieces_eligible_full;
+DROP FUNCTION IF EXISTS egd.piece_realtime_eligibility;
 
-CREATE MATERIALIZED VIEW known_cities AS ( SELECT DISTINCT( city ) FROM providers WHERE city != '' );
-CREATE UNIQUE INDEX known_cities_key ON evergreen.known_cities ( city );
-ANALYZE known_cities;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_pieces_availability;
 
-CREATE MATERIALIZED VIEW known_countries AS ( SELECT DISTINCT( country ) FROM providers WHERE country != '' );
-CREATE UNIQUE INDEX known_contries_key ON evergreen.known_countries ( country );
-ANALYZE known_countries;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_overreplicated_total;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_overreplicated_org;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_overreplicated_city;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_overreplicated_country;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_overreplicated_continent;
 
-CREATE MATERIALIZED VIEW known_continents AS ( SELECT DISTINCT( continent ) FROM providers WHERE continent != '' );
-CREATE UNIQUE INDEX known_continents_key ON evergreen.known_continents ( continent );
-ANALYZE known_continents;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_replicas_org;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_replicas_city;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_replicas_country;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_replicas_continent;
 
-CREATE MATERIALIZED VIEW replica_counts AS (
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_deals_prefiltered_for_repcount;
+
+\timing
+;
+
+-- Used exclusively by the 3 functions
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_pieces_availability WITH ( toast_tuple_target = 8160 ) AS (
   SELECT
-    curpiece.piece_cid,
-    (
-      SELECT JSONB_STRIP_NULLS( JSONB_OBJECT_AGG( k,v ) ) FROM (
-        (
-          SELECT 'total' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
-            SELECT 'total' AS k,
-            (
-              SELECT NULLIF( COUNT(*), 0 )
-                FROM published_deals d
-                JOIN clients c USING ( client_id )
+      ROW_NUMBER() OVER(
+        -- MASTER SORT LIVES HERE
+        ORDER BY
+          ( piece_log2_size < 18 ), -- everything under 256MiB goes to the back of the queue
+          http_available DESC,
+          coarse_latest_active_end_epoch NULLS LAST,
+          piece_cid
+      ) AS display_sort,
+      *,
+      ( http_available OR coarse_latest_active_end_epoch IS NOT NULL ) AS has_sources
+    FROM (
+      WITH
+        pieces_of_interest AS (
+          SELECT
+              dp.piece_id,
+              ARRAY_AGG( DISTINCT( td.tenant_id ) ) AS potential_tenant_ids
+            FROM egd.datasets_pieces dp
+            JOIN egd.tenants_datasets td USING ( dataset_id )
+          GROUP BY dp.piece_id
+        )
+      SELECT
+          p.piece_id,
+          (
+            SELECT
+                egd.coarse_epoch( MAX( kfdr.end_epoch ) )
+              FROM egd.known_fildag_deals_ranked kfdr
               WHERE
-                d.piece_cid = curpiece.piece_cid
-                  AND
-                d.end_time > expiration_cutoff()
-                  AND
-                d.status = 'active'
-                  AND
-                NOT COALESCE( (d.meta->'inactive')::BOOL, false )
-                  AND
-                c.is_affiliated
-            ) AS v
-          ) sagg ) AS v
-        )
-          UNION ALL
-        (
-          SELECT 'org_id' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
-            SELECT
-              curkey.org_id AS k,
-              (
-                SELECT NULLIF( COUNT(*), 0 )
-                  FROM published_deals d
-                  JOIN clients c USING ( client_id )
-                  JOIN providers p USING ( provider_id )
-                WHERE
-                  d.piece_cid = curpiece.piece_cid
-                    AND
-                  d.end_time > expiration_cutoff()
-                    AND
-                  d.status = 'active'
-                    AND
-                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
-                    AND
-                  c.is_affiliated
-                    AND
-                  p.org_id = curkey.org_id
-              ) AS v
-            FROM known_org_ids curkey
-          ) sagg ) AS v
-        )
-          UNION ALL
-        (
-          SELECT 'city' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
-            SELECT
-              curkey.city AS k,
-              (
-                SELECT NULLIF( COUNT(*), 0 )
-                  FROM published_deals d
-                  JOIN clients c USING ( client_id )
-                  JOIN providers p USING ( provider_id )
-                WHERE
-                  d.piece_cid = curpiece.piece_cid
-                    AND
-                  d.end_time > expiration_cutoff()
-                    AND
-                  d.status = 'active'
-                    AND
-                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
-                    AND
-                  c.is_affiliated
-                    AND
-                  p.city = curkey.city
-              ) AS v
-            FROM known_cities curkey
-          ) sagg ) AS v
-        )
-          UNION ALL
-        (
-          SELECT 'country' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
-            SELECT
-              curkey.country AS k,
-              (
-                SELECT NULLIF( COUNT(*), 0 )
-                  FROM published_deals d
-                  JOIN clients c USING ( client_id )
-                  JOIN providers p USING ( provider_id )
-                WHERE
-                  d.piece_cid = curpiece.piece_cid
-                    AND
-                  d.end_time > expiration_cutoff()
-                    AND
-                  d.status = 'active'
-                    AND
-                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
-                    AND
-                  c.is_affiliated
-                    AND
-                  p.country = curkey.country
-              ) AS v
-            FROM known_countries curkey
-          ) sagg ) AS v
-        )
-          UNION ALL
-        (
-          SELECT 'continent' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
-            SELECT
-              curkey.continent AS k,
-              (
-                SELECT NULLIF( COUNT(*), 0 )
-                  FROM published_deals d
-                  JOIN clients c USING ( client_id )
-                  JOIN providers p USING ( provider_id )
-                WHERE
-                  d.piece_cid = curpiece.piece_cid
-                    AND
-                  d.end_time > expiration_cutoff()
-                    AND
-                  d.status = 'active'
-                    AND
-                  NOT COALESCE( (d.meta->'inactive')::BOOL, false )
-                    AND
-                  c.is_affiliated
-                    AND
-                  p.continent = curkey.continent
-              ) AS v
-            FROM known_continents curkey
-          ) sagg ) AS v
-        )
-      ) agg
-    ) AS active,
-    (
-      SELECT JSONB_STRIP_NULLS( JSONB_OBJECT_AGG( k,v ) ) FROM (
-        (
-          SELECT 'total' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
-            SELECT 'total' AS k,
+                kfdr.piece_id = p.piece_id
+          ) AS coarse_latest_active_end_epoch,
+          p.piece_log2_size,
+          ( p.piece_log2_size = 36 ) AS requires_64g_sector,
+          false AS http_available,
+          p.piece_cid,
+          p.proposal_label,
+          poi.potential_tenant_ids
+        FROM pieces_of_interest poi
+        JOIN egd.pieces p USING ( piece_id )
+    ) s
+) WITH NO DATA;
+ALTER MATERIALIZED VIEW egd.mv_pieces_availability ALTER COLUMN piece_cid SET STORAGE MAIN;
+ALTER MATERIALIZED VIEW egd.mv_pieces_availability ALTER COLUMN potential_tenant_ids SET STORAGE MAIN;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_pieces_availability_key ON egd.mv_pieces_availability ( piece_id );
+CREATE INDEX IF NOT EXISTS mv_pieces_availability_standard_sector ON egd.mv_pieces_availability ( piece_id ) WHERE ( NOT requires_64g_sector );
+CREATE INDEX IF NOT EXISTS mv_pieces_availability_order ON egd.mv_pieces_availability ( display_sort ) INCLUDE ( piece_id );
+CREATE INDEX IF NOT EXISTS mv_pieces_availability_has_sources ON egd.mv_pieces_availability ( piece_id ) WHERE ( has_sources = true );
+REFRESH MATERIALIZED VIEW egd.mv_pieces_availability;
+ANALYZE egd.mv_pieces_availability;
+
+CREATE OR REPLACE
+  FUNCTION egd.piece_realtime_eligibility(
+    arg_calling_provider_id INTEGER,
+    arg_piece_cid TEXT
+  ) RETURNS TABLE (
+
+    piece_id BIGINT,
+    proposal_label TEXT,
+    piece_size_bytes BIGINT,
+
+    tenant_id SMALLINT,
+    client_id_to_use INTEGER,
+    client_address_to_use TEXT,
+    exclusive_replication BOOL,
+
+    deal_duration_days SMALLINT,
+    start_within_hours SMALLINT,
+
+    deal_already_exists BOOL,
+    recently_used_start_epoch INTEGER,
+
+    max_in_flight_bytes BIGINT,
+    cur_in_flight_bytes BIGINT,
+
+    max_total SMALLINT,
+    cur_total SMALLINT,
+
+    max_per_org SMALLINT,
+    cur_in_org SMALLINT,
+
+    max_per_city SMALLINT,
+    cur_in_city SMALLINT,
+
+    max_per_country SMALLINT,
+    cur_in_country SMALLINT,
+
+    max_per_continent SMALLINT,
+    cur_in_continent SMALLINT,
+
+    tenant_meta JSONB
+  )
+LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
+  WITH
+    ctx AS MATERIALIZED (
+      SELECT
+          p.piece_id,
+          ( 1::BIGINT << p.piece_log2_size ) AS piece_size_bytes,
+          egd.replica_expiration_cutoff_epoch() AS replica_expiration_cutoff_epoch,
+          sp.provider_id,
+          sp.org_id,
+          sp.city_id,
+          sp.country_id,
+          sp.continent_id,
+          p.proposal_label
+        FROM egd.pieces p, egd.providers sp
+      WHERE
+        p.piece_cid = arg_piece_cid
+          AND
+        sp.provider_id = arg_calling_provider_id
+    ),
+    tenant_addresses AS (
+      SELECT DISTINCT ON ( cda.tenant_id )
+          cda.tenant_id,
+          cda.client_id,
+          cda.client_address
+        FROM egd.clients_datacap_available cda, ctx
+      WHERE
+        cda.datacap_available >= ctx.piece_size_bytes
+      ORDER BY cda.tenant_id, cda.datacap_available
+    ),
+    available_tenants AS (
+      SELECT
+          (
+            SELECT SUM( datacap_available )
+              FROM egd.clients_datacap_available cda
+            WHERE cda.tenant_id = t.tenant_id
+          ) AS tenant_datacap_available,
+
+          ta.client_id AS client_id_to_use,
+          ta.client_address AS client_address_to_use,
+
+          COALESCE(
             (
-              SELECT NULLIF( COUNT(*), 0 )
-                FROM proposals pr
+              SELECT SUM( 1::BIGINT << pr.piece_log2_size )
+                FROM ctx, egd.proposals pr
               WHERE
-                pr.piece_cid = curpiece.piece_cid
+                pr.provider_id = ctx.provider_id
                   AND
                 pr.proposal_failstamp = 0
                   AND
                 pr.activated_deal_id IS NULL
-            ) AS v
-          ) sagg ) AS v
-        )
-          UNION ALL
-        (
-          SELECT 'org_id' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
-            SELECT
-              curkey.org_id AS k,
-              (
-                SELECT NULLIF( COUNT(*), 0 )
-                  FROM proposals pr
-                  JOIN providers p USING ( provider_id )
-                WHERE
-                  pr.piece_cid = curpiece.piece_cid
-                    AND
-                  pr.proposal_failstamp = 0
-                    AND
-                  pr.activated_deal_id IS NULL
-                    AND
-                  p.org_id = curkey.org_id
-              ) AS v
-            FROM known_org_ids curkey
-          ) sagg ) AS v
-        )
-          UNION ALL
-        (
-          SELECT 'city' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
-            SELECT
-              curkey.city AS k,
-              (
-                SELECT NULLIF( COUNT(*), 0 )
-                  FROM proposals pr
-                  JOIN providers p USING ( provider_id )
-                WHERE
-                  pr.piece_cid = curpiece.piece_cid
-                    AND
-                  pr.proposal_failstamp = 0
-                    AND
-                  pr.activated_deal_id IS NULL
-                    AND
-                  p.city = curkey.city
-              ) AS v
-            FROM known_cities curkey
-          ) sagg ) AS v
-        )
-          UNION ALL
-        (
-          SELECT 'country' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
-            SELECT
-              curkey.country AS k,
-              (
-                SELECT NULLIF( COUNT(*), 0 )
-                  FROM proposals pr
-                  JOIN providers p USING ( provider_id )
-                WHERE
-                  pr.piece_cid = curpiece.piece_cid
-                    AND
-                  pr.proposal_failstamp = 0
-                    AND
-                  pr.activated_deal_id IS NULL
-                    AND
-                  p.country = curkey.country
-              ) AS v
-            FROM known_countries curkey
-          ) sagg ) AS v
-        )
-          UNION ALL
-        (
-          SELECT 'continent' AS k, ( SELECT JSONB_OBJECT_AGG( k,v ) FROM (
-            SELECT
-              curkey.continent AS k,
-              (
-                SELECT NULLIF( COUNT(*), 0 )
-                  FROM proposals pr
-                  JOIN providers p USING ( provider_id )
-                WHERE
-                  pr.piece_cid = curpiece.piece_cid
-                    AND
-                  pr.proposal_failstamp = 0
-                    AND
-                  pr.activated_deal_id IS NULL
-                    AND
-                  p.continent = curkey.continent
-              ) AS v
-            FROM known_continents curkey
-          ) sagg ) AS v
-        )
-      ) agg
-    ) AS pending
-  FROM pieces curpiece
-  WHERE NOT COALESCE( (curpiece.meta->'inactive')::BOOL, false )
-);
-CREATE UNIQUE INDEX replica_counts_piece_cid ON evergreen.replica_counts ( piece_cid );
-ANALYZE evergreen.replica_counts;
+                  AND
+                pr.client_id IN ( SELECT client_id FROM egd.clients c WHERE c.tenant_id = t.tenant_id )
+            )::BIGINT,
+            0::BIGINT
+          ) AS cur_in_flight_bytes,
 
-CREATE VIEW deallist_v0 AS (
-  SELECT
-    deal_id,
-    dataset_slug,
-    piece_cid,
-    padded_size,
-    original_payload_cid AS payload_cid,
-    provider_id,
-    client_address,
-    is_filplus,
-    start_epoch,
-    start_time,
-    end_epoch,
-    end_time
-  FROM deallist_eligible
-);
+          COALESCE( (tp.tenant_provider_meta->'max_in_flight_GiB')::BIGINT,  (t.tenant_meta->'max'->'default_in_flight_GiB')::BIGINT, 1024 )::BIGINT << 30 AS max_in_flight_bytes,
 
-CREATE VIEW frontpage_stats_v0 AS (
-  WITH
-    active_totals AS (
-      SELECT
-          SUM( p.padded_size ) AS total_piece_bytes,
-          COUNT(*) AS total_deals_count
-        FROM pieces p
-        JOIN published_deals pd USING ( piece_cid )
-        JOIN clients c USING ( client_id )
+          t.tenant_id,
+          ( t.tenant_meta->'deal_params'->'duration_days' )::SMALLINT AS deal_duration_days,
+          ( t.tenant_meta->'deal_params'->'start_within_hours' )::SMALLINT AS start_within_hours,
+
+          ( t.tenant_meta->'max'->'total_replicas' )::SMALLINT AS max_total_replicas,
+          ( t.tenant_meta->'max'->'per_org' )::SMALLINT AS max_per_org,
+          ( t.tenant_meta->'max'->'per_city' )::SMALLINT AS max_per_city,
+          ( t.tenant_meta->'max'->'per_country' )::SMALLINT AS max_per_country,
+          ( t.tenant_meta->'max'->'per_continent' )::SMALLINT AS max_per_continent,
+
+          COALESCE( ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL, false ) AS filplus_exclusive,
+          COALESCE( ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL, false ) AS tenant_exclusive,
+
+          t.tenant_meta
+        FROM ctx
+        JOIN egd.tenants_providers tp USING ( provider_id )
+        JOIN egd.tenants t USING ( tenant_id )
+        LEFT JOIN tenant_addresses ta USING ( tenant_id )
       WHERE
-        NOT COALESCE( (p.meta->'inactive')::BOOL, false )
+        NOT COALESCE( ( tp.tenant_provider_meta->'inactivated' )::BOOL, false )
           AND
-        pd.status = 'active'
-          AND
-        NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
-          AND
-        c.is_affiliated
-    ),
-    active_unique AS (
-      SELECT
-          SUM( p.padded_size ) AS unique_piece_bytes,
-          COUNT(*) AS unique_deals_count
-        FROM pieces p
-      WHERE
-        NOT COALESCE( (p.meta->'inactive')::BOOL, false )
-          AND
-        p.piece_cid IN (
-          SELECT piece_cid
-            FROM published_deals pd
-            JOIN clients c USING ( client_id )
-          WHERE
-            pd.status = 'active'
-              AND
-            NOT COALESCE( (pd.meta->'inactive')::BOOL, false )
-              AND
-            c.is_affiliated
+        t.tenant_id IN (
+          SELECT UNNEST( pa.potential_tenant_ids )
+            FROM egd.mv_pieces_availability pa
+          WHERE pa.piece_id = ctx.piece_id
         )
     ),
-    provstats AS (
+    eligibility AS MATERIALIZED (
       SELECT
-          COUNT(DISTINCT(pd.provider_id)) AS unique_providers,
-          COUNT(DISTINCT(p.country)) AS unique_countries
-        FROM published_deals pd
-        JOIN clients c USING ( client_id )
-        JOIN providers p USING ( provider_id )
-      WHERE
-        pd.status != 'terminated'
-          AND
-        c.is_affiliated
-    ),
-    available_pieces AS (
-      SELECT COUNT(DISTINCT(piece_cid)) AS unique_available_cids FROM deallist_eligible
+          ctx.piece_id,
+          ctx.proposal_label,
+          ctx.piece_size_bytes,
+
+          at.tenant_id,
+          at.tenant_datacap_available,
+          at.client_id_to_use,
+          at.client_address_to_use,
+          at.tenant_exclusive,
+
+          at.deal_duration_days,
+          at.start_within_hours,
+
+          (
+            SELECT MAX( start_epoch )
+              FROM egd.proposals pr
+              JOIN egd.clients c USING ( client_id )
+            WHERE
+              pr.piece_id = ctx.piece_id
+                AND
+              pr.provider_id = ctx.provider_id
+                AND
+              ( at.tenant_id = c.tenant_id OR NOT at.tenant_exclusive )
+          ) AS previous_start_epoch,
+
+          EXISTS (
+            SELECT 42
+              FROM egd.known_deals_ranked kdr
+            WHERE
+              kdr.piece_id = ctx.piece_id
+                AND
+              kdr.provider_id = ctx.provider_id
+                AND
+              kdr.end_epoch >= ctx.replica_expiration_cutoff_epoch
+                AND
+              ( kdr.is_filplus OR NOT at.filplus_exclusive )
+                AND
+              ( at.tenant_id = ANY ( kdr.claimant_ids ) OR NOT at.tenant_exclusive  )
+          ) AS deal_already_exists,
+
+          at.max_in_flight_bytes,
+          at.cur_in_flight_bytes,
+
+          at.max_total_replicas AS max_total,
+          (
+            SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
+              FROM egd.known_deals_ranked kdr
+            WHERE
+              kdr.piece_id = ctx.piece_id
+                AND
+              kdr.end_epoch >= ctx.replica_expiration_cutoff_epoch
+                AND
+              ( kdr.is_filplus OR NOT at.filplus_exclusive )
+                AND
+              ( at.tenant_id = ANY ( kdr.claimant_ids ) OR NOT at.tenant_exclusive )
+          ) AS cur_total,
+
+          -- next 4 are generated from a template
+          /*
+
+          perl -E '
+            @spatial_types = qw( org city country continent );
+            say join "\n",
+
+            ( map { "
+          at.max_per_${_},
+          (
+            SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
+              FROM egd.known_deals_ranked kdr, egd.providers p
+            WHERE
+              kdr.piece_id = ctx.piece_id
+                AND
+              kdr.end_epoch >= ctx.replica_expiration_cutoff_epoch
+                AND
+              kdr.provider_id = p.provider_id
+                AND
+              p.${_}_id = ctx.${_}_id
+                AND
+              ( kdr.is_filplus OR NOT at.filplus_exclusive )
+                AND
+              ( at.tenant_id = ANY ( kdr.claimant_ids ) OR NOT at.tenant_exclusive  )
+          ) AS cur_in_${_}," }
+            @spatial_types )
+
+          ' | pbcopy
+
+          */
+
+          -- BEGIN SQLGEN
+
+          at.max_per_org,
+          (
+            SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
+              FROM egd.known_deals_ranked kdr, egd.providers p
+            WHERE
+              kdr.piece_id = ctx.piece_id
+                AND
+              kdr.end_epoch >= ctx.replica_expiration_cutoff_epoch
+                AND
+              kdr.provider_id = p.provider_id
+                AND
+              p.org_id = ctx.org_id
+                AND
+              ( kdr.is_filplus OR NOT at.filplus_exclusive )
+                AND
+              ( at.tenant_id = ANY ( kdr.claimant_ids ) OR NOT at.tenant_exclusive  )
+          ) AS cur_in_org,
+
+          at.max_per_city,
+          (
+            SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
+              FROM egd.known_deals_ranked kdr, egd.providers p
+            WHERE
+              kdr.piece_id = ctx.piece_id
+                AND
+              kdr.end_epoch >= ctx.replica_expiration_cutoff_epoch
+                AND
+              kdr.provider_id = p.provider_id
+                AND
+              p.city_id = ctx.city_id
+                AND
+              ( kdr.is_filplus OR NOT at.filplus_exclusive )
+                AND
+              ( at.tenant_id = ANY ( kdr.claimant_ids ) OR NOT at.tenant_exclusive  )
+          ) AS cur_in_city,
+
+          at.max_per_country,
+          (
+            SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
+              FROM egd.known_deals_ranked kdr, egd.providers p
+            WHERE
+              kdr.piece_id = ctx.piece_id
+                AND
+              kdr.end_epoch >= ctx.replica_expiration_cutoff_epoch
+                AND
+              kdr.provider_id = p.provider_id
+                AND
+              p.country_id = ctx.country_id
+                AND
+              ( kdr.is_filplus OR NOT at.filplus_exclusive )
+                AND
+              ( at.tenant_id = ANY ( kdr.claimant_ids ) OR NOT at.tenant_exclusive  )
+          ) AS cur_in_country,
+
+          at.max_per_continent,
+          (
+            SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
+              FROM egd.known_deals_ranked kdr, egd.providers p
+            WHERE
+              kdr.piece_id = ctx.piece_id
+                AND
+              kdr.end_epoch >= ctx.replica_expiration_cutoff_epoch
+                AND
+              kdr.provider_id = p.provider_id
+                AND
+              p.continent_id = ctx.continent_id
+                AND
+              ( kdr.is_filplus OR NOT at.filplus_exclusive )
+                AND
+              ( at.tenant_id = ANY ( kdr.claimant_ids ) OR NOT at.tenant_exclusive  )
+          ) AS cur_in_continent,
+          -- END SQLGEN
+
+          at.tenant_meta
+
+        FROM ctx, available_tenants at
+
     )
-  SELECT * FROM active_totals, active_unique, provstats, available_pieces
-);
+  SELECT
+      piece_id,
+      proposal_label,
+      piece_size_bytes,
+      tenant_id,
+      client_id_to_use,
+      client_address_to_use,
+      tenant_exclusive,
+      deal_duration_days, start_within_hours,
+      deal_already_exists,
+      CASE WHEN previous_start_epoch > egd.proposal_deduplication_recent_cutoff_epoch()
+        THEN previous_start_epoch
+        ELSE NULL::INTEGER
+      END AS recently_used_start_epoch,
+      max_in_flight_bytes, cur_in_flight_bytes,
+      max_total, cur_total,
+      max_per_org, cur_in_org,
+      max_per_city, cur_in_city,
+      max_per_country, cur_in_country,
+      max_per_continent, cur_in_continent,
+      tenant_meta JSONB
+    FROM eligibility
+  ORDER BY
+    -- eligible 1st
+    (
+      NOT deal_already_exists
+        AND
+      client_id_to_use IS NOT NULL
+        AND
+      cur_in_flight_bytes < max_in_flight_bytes
+        AND
+      cur_total < max_total
+        AND
+      cur_in_org < max_per_org
+        AND
+      cur_in_city < max_per_city
+        AND
+      cur_in_country < max_per_country
+        AND
+      cur_in_continent < max_per_continent
+    ) DESC,
+    tenant_exclusive DESC, -- exclusive 1st
+    tenant_datacap_available DESC
+$$;
+
+
+-- internal materialization, not used by the app directly
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_deals_prefiltered_for_repcount AS
+  WITH
+    cutoff AS MATERIALIZED (
+      SELECT egd.replica_expiration_cutoff_epoch() AS epoch
+    ),
+    filtered AS (
+      SELECT
+          kdr.piece_id,
+          kdr.provider_id,
+          kdr.is_filplus,
+          kdr.claimant_ids
+        FROM egd.known_deals_ranked kdr, cutoff
+      WHERE
+        kdr.piece_id IN (  -- restrict to only pieces we care about
+          SELECT dp.piece_id
+            FROM egd.datasets_pieces dp
+            JOIN egd.tenants_datasets td USING ( dataset_id )
+        )
+          AND
+        kdr.end_epoch >= cutoff.epoch
+          AND
+        kdr.state > 1::"char"
+          AND
+        kdr.intra_sp_rank = 1 -- this is safe, since the rank is based on the above 2 conditions
+    )
+
+  SELECT
+      piece_id,
+      provider_id,
+      is_filplus,
+      UNNEST( claimant_ids ) AS claimant_id
+    FROM filtered
+
+UNION ALL
+
+  SELECT
+      piece_id,
+      provider_id,
+      is_filplus,
+      0 AS claimant_id
+    FROM filtered
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_deals_prefiltered_for_repcount_key ON egd.mv_deals_prefiltered_for_repcount ( provider_id, claimant_id, piece_id, is_filplus );
+ANALYZE egd.mv_deals_prefiltered_for_repcount;
+
+-- next 2*4 are generated from a template
+-- the continent one doubles as a `totals` table, with continent_id being NULL
+/*
+
+perl -E '
+  @spatial_types = qw( continent country city org );
+  say join "\n",
+
+    ( map { "
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_${_} AS
+  (
+    SELECT
+        piece_id,
+        claimant_id,
+        ${_}_id,
+        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+        ( COUNT(*) )::SMALLINT AS replicas_any
+      FROM egd.mv_deals_prefiltered_for_repcount
+      JOIN egd.providers USING ( provider_id )
+    WHERE claimant_id != 0
+    GROUP BY
+      piece_id, ${_}_id, claimant_id
+  )
+    UNION ALL
+  (
+    SELECT
+        piece_id,
+        NULL::INTEGER,
+        ${_}_id,
+        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+        ( COUNT(*) )::SMALLINT AS replicas_any
+      FROM egd.mv_deals_prefiltered_for_repcount
+      JOIN egd.providers USING ( provider_id )
+    WHERE claimant_id = 0
+    GROUP BY GROUPING SETS (
+      @{[ ( $_ eq q{continent} ) ? q{( piece_id ),} : q{} ]}
+      ( piece_id, ${_}_id )
+    )
+  )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_${_}_idx ON egd.mv_replicas_${_} ( piece_id, ${_}_id, claimant_id );
+ANALYZE egd.mv_replicas_${_};
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_${_} AS
+  SELECT DISTINCT
+      r.piece_id,
+      t.tenant_id,
+      r.${_}_id
+    FROM egd.mv_replicas_${_} r
+    JOIN egd.datasets_pieces USING ( piece_id )
+    JOIN egd.tenants_datasets USING ( dataset_id )
+    JOIN egd.tenants t USING ( tenant_id )
+  WHERE
+    r.${_}_id > 0
+
+      AND
+
+    (
+      (
+        r.claimant_id = t.tenant_id
+          AND
+        ( t.tenant_meta->\x{27}max\x{27}->\x{27}tenant_exclusive\x{27} )::BOOL
+      )
+        OR
+      (
+        r.claimant_id IS NULL
+          AND
+        NOT COALESCE( ( t.tenant_meta->\x{27}max\x{27}->\x{27}tenant_exclusive\x{27} )::BOOL, false )
+      )
+    )
+
+      AND
+
+    (
+      (
+        ( t.tenant_meta->\x{27}max\x{27}->\x{27}filplus_exclusive\x{27} )::BOOL
+          AND
+        ( t.tenant_meta->\x{27}max\x{27}->\x{27}per_${_}\x{27} )::SMALLINT <= r.replicas_filplus
+      )
+        OR
+      (
+        NOT COALESCE( ( t.tenant_meta->\x{27}max\x{27}->\x{27}filplus_exclusive\x{27} )::BOOL, false )
+          AND
+        ( t.tenant_meta->\x{27}max\x{27}->\x{27}per_${_}\x{27} )::SMALLINT <= r.replicas_any
+      )
+    )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_${_}_idx ON egd.mv_overreplicated_${_} ( piece_id, ${_}_id, tenant_id );
+ANALYZE egd.mv_overreplicated_${_};
+" }
+  @spatial_types )
+
+' | pbcopy
+
+*/
+
+-- BEGIN SQLGEN
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_continent AS
+  (
+    SELECT
+        piece_id,
+        claimant_id,
+        continent_id,
+        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+        ( COUNT(*) )::SMALLINT AS replicas_any
+      FROM egd.mv_deals_prefiltered_for_repcount
+      JOIN egd.providers USING ( provider_id )
+    WHERE claimant_id != 0
+    GROUP BY
+      piece_id, continent_id, claimant_id
+  )
+    UNION ALL
+  (
+    SELECT
+        piece_id,
+        NULL::INTEGER,
+        continent_id,
+        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+        ( COUNT(*) )::SMALLINT AS replicas_any
+      FROM egd.mv_deals_prefiltered_for_repcount
+      JOIN egd.providers USING ( provider_id )
+    WHERE claimant_id = 0
+    GROUP BY GROUPING SETS (
+      ( piece_id ),
+      ( piece_id, continent_id )
+    )
+  )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_continent_idx ON egd.mv_replicas_continent ( piece_id, continent_id, claimant_id );
+ANALYZE egd.mv_replicas_continent;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_continent AS
+  SELECT DISTINCT
+      r.piece_id,
+      t.tenant_id,
+      r.continent_id
+    FROM egd.mv_replicas_continent r
+    JOIN egd.datasets_pieces USING ( piece_id )
+    JOIN egd.tenants_datasets USING ( dataset_id )
+    JOIN egd.tenants t USING ( tenant_id )
+  WHERE
+    r.continent_id > 0
+
+      AND
+
+    (
+      (
+        r.claimant_id = t.tenant_id
+          AND
+        ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL
+      )
+        OR
+      (
+        r.claimant_id IS NULL
+          AND
+        NOT COALESCE( ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL, false )
+      )
+    )
+
+      AND
+
+    (
+      (
+        ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL
+          AND
+        ( t.tenant_meta->'max'->'per_continent' )::SMALLINT <= r.replicas_filplus
+      )
+        OR
+      (
+        NOT COALESCE( ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL, false )
+          AND
+        ( t.tenant_meta->'max'->'per_continent' )::SMALLINT <= r.replicas_any
+      )
+    )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_continent_idx ON egd.mv_overreplicated_continent ( piece_id, continent_id, tenant_id );
+ANALYZE egd.mv_overreplicated_continent;
+
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_country AS
+  (
+    SELECT
+        piece_id,
+        claimant_id,
+        country_id,
+        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+        ( COUNT(*) )::SMALLINT AS replicas_any
+      FROM egd.mv_deals_prefiltered_for_repcount
+      JOIN egd.providers USING ( provider_id )
+    WHERE claimant_id != 0
+    GROUP BY
+      piece_id, country_id, claimant_id
+  )
+    UNION ALL
+  (
+    SELECT
+        piece_id,
+        NULL::INTEGER,
+        country_id,
+        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+        ( COUNT(*) )::SMALLINT AS replicas_any
+      FROM egd.mv_deals_prefiltered_for_repcount
+      JOIN egd.providers USING ( provider_id )
+    WHERE claimant_id = 0
+    GROUP BY GROUPING SETS (
+
+      ( piece_id, country_id )
+    )
+  )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_country_idx ON egd.mv_replicas_country ( piece_id, country_id, claimant_id );
+ANALYZE egd.mv_replicas_country;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_country AS
+  SELECT DISTINCT
+      r.piece_id,
+      t.tenant_id,
+      r.country_id
+    FROM egd.mv_replicas_country r
+    JOIN egd.datasets_pieces USING ( piece_id )
+    JOIN egd.tenants_datasets USING ( dataset_id )
+    JOIN egd.tenants t USING ( tenant_id )
+  WHERE
+    r.country_id > 0
+
+      AND
+
+    (
+      (
+        r.claimant_id = t.tenant_id
+          AND
+        ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL
+      )
+        OR
+      (
+        r.claimant_id IS NULL
+          AND
+        NOT COALESCE( ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL, false )
+      )
+    )
+
+      AND
+
+    (
+      (
+        ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL
+          AND
+        ( t.tenant_meta->'max'->'per_country' )::SMALLINT <= r.replicas_filplus
+      )
+        OR
+      (
+        NOT COALESCE( ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL, false )
+          AND
+        ( t.tenant_meta->'max'->'per_country' )::SMALLINT <= r.replicas_any
+      )
+    )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_country_idx ON egd.mv_overreplicated_country ( piece_id, country_id, tenant_id );
+ANALYZE egd.mv_overreplicated_country;
+
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_city AS
+  (
+    SELECT
+        piece_id,
+        claimant_id,
+        city_id,
+        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+        ( COUNT(*) )::SMALLINT AS replicas_any
+      FROM egd.mv_deals_prefiltered_for_repcount
+      JOIN egd.providers USING ( provider_id )
+    WHERE claimant_id != 0
+    GROUP BY
+      piece_id, city_id, claimant_id
+  )
+    UNION ALL
+  (
+    SELECT
+        piece_id,
+        NULL::INTEGER,
+        city_id,
+        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+        ( COUNT(*) )::SMALLINT AS replicas_any
+      FROM egd.mv_deals_prefiltered_for_repcount
+      JOIN egd.providers USING ( provider_id )
+    WHERE claimant_id = 0
+    GROUP BY GROUPING SETS (
+
+      ( piece_id, city_id )
+    )
+  )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_city_idx ON egd.mv_replicas_city ( piece_id, city_id, claimant_id );
+ANALYZE egd.mv_replicas_city;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_city AS
+  SELECT DISTINCT
+      r.piece_id,
+      t.tenant_id,
+      r.city_id
+    FROM egd.mv_replicas_city r
+    JOIN egd.datasets_pieces USING ( piece_id )
+    JOIN egd.tenants_datasets USING ( dataset_id )
+    JOIN egd.tenants t USING ( tenant_id )
+  WHERE
+    r.city_id > 0
+
+      AND
+
+    (
+      (
+        r.claimant_id = t.tenant_id
+          AND
+        ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL
+      )
+        OR
+      (
+        r.claimant_id IS NULL
+          AND
+        NOT COALESCE( ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL, false )
+      )
+    )
+
+      AND
+
+    (
+      (
+        ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL
+          AND
+        ( t.tenant_meta->'max'->'per_city' )::SMALLINT <= r.replicas_filplus
+      )
+        OR
+      (
+        NOT COALESCE( ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL, false )
+          AND
+        ( t.tenant_meta->'max'->'per_city' )::SMALLINT <= r.replicas_any
+      )
+    )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_city_idx ON egd.mv_overreplicated_city ( piece_id, city_id, tenant_id );
+ANALYZE egd.mv_overreplicated_city;
+
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_org AS
+  (
+    SELECT
+        piece_id,
+        claimant_id,
+        org_id,
+        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+        ( COUNT(*) )::SMALLINT AS replicas_any
+      FROM egd.mv_deals_prefiltered_for_repcount
+      JOIN egd.providers USING ( provider_id )
+    WHERE claimant_id != 0
+    GROUP BY
+      piece_id, org_id, claimant_id
+  )
+    UNION ALL
+  (
+    SELECT
+        piece_id,
+        NULL::INTEGER,
+        org_id,
+        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+        ( COUNT(*) )::SMALLINT AS replicas_any
+      FROM egd.mv_deals_prefiltered_for_repcount
+      JOIN egd.providers USING ( provider_id )
+    WHERE claimant_id = 0
+    GROUP BY GROUPING SETS (
+
+      ( piece_id, org_id )
+    )
+  )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_org_idx ON egd.mv_replicas_org ( piece_id, org_id, claimant_id );
+ANALYZE egd.mv_replicas_org;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_org AS
+  SELECT DISTINCT
+      r.piece_id,
+      t.tenant_id,
+      r.org_id
+    FROM egd.mv_replicas_org r
+    JOIN egd.datasets_pieces USING ( piece_id )
+    JOIN egd.tenants_datasets USING ( dataset_id )
+    JOIN egd.tenants t USING ( tenant_id )
+  WHERE
+    r.org_id > 0
+
+      AND
+
+    (
+      (
+        r.claimant_id = t.tenant_id
+          AND
+        ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL
+      )
+        OR
+      (
+        r.claimant_id IS NULL
+          AND
+        NOT COALESCE( ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL, false )
+      )
+    )
+
+      AND
+
+    (
+      (
+        ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL
+          AND
+        ( t.tenant_meta->'max'->'per_org' )::SMALLINT <= r.replicas_filplus
+      )
+        OR
+      (
+        NOT COALESCE( ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL, false )
+          AND
+        ( t.tenant_meta->'max'->'per_org' )::SMALLINT <= r.replicas_any
+      )
+    )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_org_idx ON egd.mv_overreplicated_org ( piece_id, org_id, tenant_id );
+ANALYZE egd.mv_overreplicated_org;
+
+-- END SQLGEN
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_total AS
+
+  SELECT DISTINCT
+      r.piece_id,
+      t.tenant_id
+    FROM egd.mv_replicas_continent r
+    JOIN egd.datasets_pieces USING ( piece_id )
+    JOIN egd.tenants_datasets USING ( dataset_id )
+    JOIN egd.tenants t USING ( tenant_id )
+  WHERE
+
+    r.continent_id IS NULL
+
+      AND
+
+    (
+      (
+        r.claimant_id = t.tenant_id
+          AND
+        ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL
+      )
+        OR
+      (
+        r.claimant_id IS NULL
+          AND
+        NOT COALESCE( ( t.tenant_meta->'max'->'tenant_exclusive' )::BOOL, false )
+      )
+    )
+
+      AND
+
+    (
+      (
+        ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL
+          AND
+        ( t.tenant_meta->'max'->'total_replicas' )::SMALLINT <= r.replicas_filplus
+      )
+        OR
+      (
+        NOT COALESCE( ( t.tenant_meta->'max'->'filplus_exclusive' )::BOOL, false )
+          AND
+        ( t.tenant_meta->'max'->'total_replicas' )::SMALLINT <= r.replicas_any
+      )
+    )
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_total_idx ON egd.mv_overreplicated_total ( piece_id, tenant_id );
+ANALYZE egd.mv_overreplicated_total;
+
+
+-- aid the orglocal variant below
+CREATE INDEX IF NOT EXISTS mv_replicas_org_local_idx ON egd.mv_replicas_org ( org_id, piece_id ) WHERE ( claimant_id IS NULL AND replicas_any > 0 );
+ANALYZE egd.mv_replicas_org;
+
+/*
+Templated function in 2 variants:
+- egd.pieces_eligible_head(...) Inline (lateral) overreplication-evaluator, allows for linear-slowdown LIMIT
+- egd.pieces_eligible_full(...) Pre-calculated overreplication-evaluator, steep up-front cost, sublinear-slowdown LIMIT on larger set
+
+Regenerate via:
+
+perl -E '
+
+  my $no_overrep_cond =
+      "
+        et.tenant_id = ANY( pa.potential_tenant_ids )
+
+          AND
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_total o_total
+          WHERE
+            o_total.piece_id = pa.piece_id
+              AND
+            o_total.tenant_id = et.tenant_id
+        )
+
+          AND
+
+        @{[
+          join \"\n
+          AND\n\", map {
+        \"
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_${_} o_${_}
+          WHERE
+            o_${_}.piece_id = pa.piece_id
+              AND
+            o_${_}.tenant_id = et.tenant_id
+              AND
+            o_${_}.${_}_id = sp.${_}_id
+        )\"
+      } qw( org city country continent )
+  ]}";
+
+  my $parts = {
+
+    head => {
+      COND => "
+    --
+    -- there are enabled tenants
+    -- ( we *MUST* check a COUNT(*), otherwise the lateral executes for *everything* and only then returns 0 )
+    ( SELECT COUNT(*) FROM enabled_tenants ) > 0
+
+      AND
+
+    -- there are claiming tenants
+    claiming_tenants.tenant_ids IS NOT NULL
+",
+
+      FROM => ", LATERAL (
+      SELECT
+          ARRAY_AGG( et.tenant_id ) AS tenant_ids
+        FROM enabled_tenants et
+
+      WHERE
+
+$no_overrep_cond
+      ) claiming_tenants",
+
+      CTE => "",
+    },
+
+    full => {
+      COND => "
+    --
+    -- there is a list of interested+enabled tenants
+    claiming_tenants.piece_id = pa.piece_id
+",
+
+      FROM => ", claiming_tenants",
+
+      CTE => ",
+    claiming_tenants AS (
+      SELECT
+          piece_id,
+          ARRAY_AGG( et.tenant_id ) AS tenant_ids
+        FROM egd.mv_pieces_availability pa, sp, enabled_tenants et
+
+      WHERE
+        $no_overrep_cond
+      GROUP BY piece_id
+    )",
+    },
+  };
+
+  say join "\n", map {
+    "
+CREATE OR REPLACE
+  FUNCTION egd.pieces_eligible_${_}(
+    arg_calling_provider_id INTEGER,
+    arg_limit INTEGER,
+    arg_only_tenant_id SMALLINT, -- use 0 for ~any~
+    arg_include_sourceless BOOL,
+    arg_only_orglocal BOOL
+  ) RETURNS TABLE (
+    piece_id BIGINT,
+    piece_log2_size SMALLINT,
+    has_sources_http BOOL,
+    has_sources_fil_active BOOL,
+    piece_cid TEXT,
+    tenant_ids SMALLINT[]
+  )
+LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS \$\$
+
+  WITH
+    sp AS MATERIALIZED (
+      SELECT
+          sp.org_id,
+          sp.city_id,
+          sp.country_id,
+          sp.continent_id,
+          sp.can_seal_64g_sectors
+        FROM egd.providers sp
+      WHERE
+        sp.provider_id = arg_calling_provider_id
+    ),
+    enabled_tenants AS MATERIALIZED (
+      SELECT tp.tenant_id
+        FROM egd.tenants_providers tp
+      WHERE
+        tp.provider_id = arg_calling_provider_id
+          AND
+        NOT COALESCE( ( tp.tenant_provider_meta->\x{27}inactivated\x{27} )::BOOL, false )
+          AND
+        ( arg_only_tenant_id = 0 OR arg_only_tenant_id = tp.tenant_id )
+    )
+    $parts->{$_}{CTE}
+
+  SELECT
+      pa.piece_id,
+      pa.piece_log2_size,
+      pa.http_available AS has_sources_http,
+      ( pa.coarse_latest_active_end_epoch IS NOT NULL ) AS has_sources_fil_active,
+      pa.piece_cid,
+      claiming_tenants.tenant_ids
+    FROM egd.mv_pieces_availability pa, sp $parts->{$_}{FROM}
+
+  WHERE $parts->{$_}{COND}
+      AND
+
+    --
+    -- can we seal it ourselves?
+    (
+      sp.can_seal_64g_sectors
+        OR
+      NOT pa.requires_64g_sector
+    )
+
+      AND
+
+    --
+    -- sourcelessness
+    (
+      arg_include_sourceless
+        OR
+      pa.has_sources = true
+    )
+
+      AND
+
+    --
+    -- orglocal only
+    (
+      NOT arg_only_orglocal
+        OR
+      EXISTS (
+        SELECT 42
+          FROM egd.mv_replicas_org ro
+        WHERE
+          ro.piece_id = pa.piece_id
+            AND
+          ro.org_id = sp.org_id
+            AND
+          claimant_id IS NULL
+            AND
+          replicas_any > 0
+      )
+    )
+
+      AND
+
+    --
+    -- exclude my own known/in-flight
+    NOT EXISTS (
+      SELECT 42
+        FROM egd.mv_deals_prefiltered_for_repcount dpfr
+      WHERE
+        dpfr.piece_id = pa.piece_id
+          AND
+        dpfr.provider_id = arg_calling_provider_id
+    )
+
+      AND
+
+    --
+    -- exclude my own pre-flight
+    NOT EXISTS (
+      SELECT 42
+        FROM egd.proposals pr
+      WHERE
+        pr.piece_id = pa.piece_id
+          AND
+        pr.provider_id = arg_calling_provider_id
+          AND
+        pr.proposal_failstamp = 0
+          AND
+        pr.activated_deal_id IS NULL
+    )
+
+  ORDER BY display_sort
+
+  LIMIT arg_limit
+\$\$;
+"
+
+  } qw( head full )
+' | pbcopy
+
+*/
+
+-- BEGIN SQLGEN
+
+CREATE OR REPLACE
+  FUNCTION egd.pieces_eligible_head(
+    arg_calling_provider_id INTEGER,
+    arg_limit INTEGER,
+    arg_only_tenant_id SMALLINT, -- use 0 for ~any~
+    arg_include_sourceless BOOL,
+    arg_only_orglocal BOOL
+  ) RETURNS TABLE (
+    piece_id BIGINT,
+    piece_log2_size SMALLINT,
+    has_sources_http BOOL,
+    has_sources_fil_active BOOL,
+    piece_cid TEXT,
+    tenant_ids SMALLINT[]
+  )
+LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
+
+  WITH
+    sp AS MATERIALIZED (
+      SELECT
+          sp.org_id,
+          sp.city_id,
+          sp.country_id,
+          sp.continent_id,
+          sp.can_seal_64g_sectors
+        FROM egd.providers sp
+      WHERE
+        sp.provider_id = arg_calling_provider_id
+    ),
+    enabled_tenants AS MATERIALIZED (
+      SELECT tp.tenant_id
+        FROM egd.tenants_providers tp
+      WHERE
+        tp.provider_id = arg_calling_provider_id
+          AND
+        NOT COALESCE( ( tp.tenant_provider_meta->'inactivated' )::BOOL, false )
+          AND
+        ( arg_only_tenant_id = 0 OR arg_only_tenant_id = tp.tenant_id )
+    )
+
+
+  SELECT
+      pa.piece_id,
+      pa.piece_log2_size,
+      pa.http_available AS has_sources_http,
+      ( pa.coarse_latest_active_end_epoch IS NOT NULL ) AS has_sources_fil_active,
+      pa.piece_cid,
+      claiming_tenants.tenant_ids
+    FROM egd.mv_pieces_availability pa, sp , LATERAL (
+      SELECT
+          ARRAY_AGG( et.tenant_id ) AS tenant_ids
+        FROM enabled_tenants et
+
+      WHERE
+
+
+        et.tenant_id = ANY( pa.potential_tenant_ids )
+
+          AND
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_total o_total
+          WHERE
+            o_total.piece_id = pa.piece_id
+              AND
+            o_total.tenant_id = et.tenant_id
+        )
+
+          AND
+
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_org o_org
+          WHERE
+            o_org.piece_id = pa.piece_id
+              AND
+            o_org.tenant_id = et.tenant_id
+              AND
+            o_org.org_id = sp.org_id
+        )
+
+          AND
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_city o_city
+          WHERE
+            o_city.piece_id = pa.piece_id
+              AND
+            o_city.tenant_id = et.tenant_id
+              AND
+            o_city.city_id = sp.city_id
+        )
+
+          AND
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_country o_country
+          WHERE
+            o_country.piece_id = pa.piece_id
+              AND
+            o_country.tenant_id = et.tenant_id
+              AND
+            o_country.country_id = sp.country_id
+        )
+
+          AND
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_continent o_continent
+          WHERE
+            o_continent.piece_id = pa.piece_id
+              AND
+            o_continent.tenant_id = et.tenant_id
+              AND
+            o_continent.continent_id = sp.continent_id
+        )
+      ) claiming_tenants
+
+  WHERE
+    --
+    -- there are enabled tenants
+    -- ( we *MUST* check a COUNT(*), otherwise the lateral executes for *everything* and only then returns 0 )
+    ( SELECT COUNT(*) FROM enabled_tenants ) > 0
+
+      AND
+
+    -- there are claiming tenants
+    claiming_tenants.tenant_ids IS NOT NULL
+
+      AND
+
+    --
+    -- can we seal it ourselves?
+    (
+      sp.can_seal_64g_sectors
+        OR
+      NOT pa.requires_64g_sector
+    )
+
+      AND
+
+    --
+    -- sourcelessness
+    (
+      arg_include_sourceless
+        OR
+      pa.has_sources = true
+    )
+
+      AND
+
+    --
+    -- orglocal only
+    (
+      NOT arg_only_orglocal
+        OR
+      EXISTS (
+        SELECT 42
+          FROM egd.mv_replicas_org ro
+        WHERE
+          ro.piece_id = pa.piece_id
+            AND
+          ro.org_id = sp.org_id
+            AND
+          claimant_id IS NULL
+            AND
+          replicas_any > 0
+      )
+    )
+
+      AND
+
+    --
+    -- exclude my own known/in-flight
+    NOT EXISTS (
+      SELECT 42
+        FROM egd.mv_deals_prefiltered_for_repcount dpfr
+      WHERE
+        dpfr.piece_id = pa.piece_id
+          AND
+        dpfr.provider_id = arg_calling_provider_id
+    )
+
+      AND
+
+    --
+    -- exclude my own pre-flight
+    NOT EXISTS (
+      SELECT 42
+        FROM egd.proposals pr
+      WHERE
+        pr.piece_id = pa.piece_id
+          AND
+        pr.provider_id = arg_calling_provider_id
+          AND
+        pr.proposal_failstamp = 0
+          AND
+        pr.activated_deal_id IS NULL
+    )
+
+  ORDER BY display_sort
+
+  LIMIT arg_limit
+$$;
+
+
+CREATE OR REPLACE
+  FUNCTION egd.pieces_eligible_full(
+    arg_calling_provider_id INTEGER,
+    arg_limit INTEGER,
+    arg_only_tenant_id SMALLINT, -- use 0 for ~any~
+    arg_include_sourceless BOOL,
+    arg_only_orglocal BOOL
+  ) RETURNS TABLE (
+    piece_id BIGINT,
+    piece_log2_size SMALLINT,
+    has_sources_http BOOL,
+    has_sources_fil_active BOOL,
+    piece_cid TEXT,
+    tenant_ids SMALLINT[]
+  )
+LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
+
+  WITH
+    sp AS MATERIALIZED (
+      SELECT
+          sp.org_id,
+          sp.city_id,
+          sp.country_id,
+          sp.continent_id,
+          sp.can_seal_64g_sectors
+        FROM egd.providers sp
+      WHERE
+        sp.provider_id = arg_calling_provider_id
+    ),
+    enabled_tenants AS MATERIALIZED (
+      SELECT tp.tenant_id
+        FROM egd.tenants_providers tp
+      WHERE
+        tp.provider_id = arg_calling_provider_id
+          AND
+        NOT COALESCE( ( tp.tenant_provider_meta->'inactivated' )::BOOL, false )
+          AND
+        ( arg_only_tenant_id = 0 OR arg_only_tenant_id = tp.tenant_id )
+    )
+    ,
+    claiming_tenants AS (
+      SELECT
+          piece_id,
+          ARRAY_AGG( et.tenant_id ) AS tenant_ids
+        FROM egd.mv_pieces_availability pa, sp, enabled_tenants et
+
+      WHERE
+
+        et.tenant_id = ANY( pa.potential_tenant_ids )
+
+          AND
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_total o_total
+          WHERE
+            o_total.piece_id = pa.piece_id
+              AND
+            o_total.tenant_id = et.tenant_id
+        )
+
+          AND
+
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_org o_org
+          WHERE
+            o_org.piece_id = pa.piece_id
+              AND
+            o_org.tenant_id = et.tenant_id
+              AND
+            o_org.org_id = sp.org_id
+        )
+
+          AND
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_city o_city
+          WHERE
+            o_city.piece_id = pa.piece_id
+              AND
+            o_city.tenant_id = et.tenant_id
+              AND
+            o_city.city_id = sp.city_id
+        )
+
+          AND
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_country o_country
+          WHERE
+            o_country.piece_id = pa.piece_id
+              AND
+            o_country.tenant_id = et.tenant_id
+              AND
+            o_country.country_id = sp.country_id
+        )
+
+          AND
+
+        NOT EXISTS (
+          SELECT 42
+            FROM egd.mv_overreplicated_continent o_continent
+          WHERE
+            o_continent.piece_id = pa.piece_id
+              AND
+            o_continent.tenant_id = et.tenant_id
+              AND
+            o_continent.continent_id = sp.continent_id
+        )
+      GROUP BY piece_id
+    )
+
+  SELECT
+      pa.piece_id,
+      pa.piece_log2_size,
+      pa.http_available AS has_sources_http,
+      ( pa.coarse_latest_active_end_epoch IS NOT NULL ) AS has_sources_fil_active,
+      pa.piece_cid,
+      claiming_tenants.tenant_ids
+    FROM egd.mv_pieces_availability pa, sp , claiming_tenants
+
+  WHERE
+    --
+    -- there is a list of interested+enabled tenants
+    claiming_tenants.piece_id = pa.piece_id
+
+      AND
+
+    --
+    -- can we seal it ourselves?
+    (
+      sp.can_seal_64g_sectors
+        OR
+      NOT pa.requires_64g_sector
+    )
+
+      AND
+
+    --
+    -- sourcelessness
+    (
+      arg_include_sourceless
+        OR
+      pa.has_sources = true
+    )
+
+      AND
+
+    --
+    -- orglocal only
+    (
+      NOT arg_only_orglocal
+        OR
+      EXISTS (
+        SELECT 42
+          FROM egd.mv_replicas_org ro
+        WHERE
+          ro.piece_id = pa.piece_id
+            AND
+          ro.org_id = sp.org_id
+            AND
+          claimant_id IS NULL
+            AND
+          replicas_any > 0
+      )
+    )
+
+      AND
+
+    --
+    -- exclude my own known/in-flight
+    NOT EXISTS (
+      SELECT 42
+        FROM egd.mv_deals_prefiltered_for_repcount dpfr
+      WHERE
+        dpfr.piece_id = pa.piece_id
+          AND
+        dpfr.provider_id = arg_calling_provider_id
+    )
+
+      AND
+
+    --
+    -- exclude my own pre-flight
+    NOT EXISTS (
+      SELECT 42
+        FROM egd.proposals pr
+      WHERE
+        pr.piece_id = pa.piece_id
+          AND
+        pr.provider_id = arg_calling_provider_id
+          AND
+        pr.proposal_failstamp = 0
+          AND
+        pr.activated_deal_id IS NULL
+    )
+
+  ORDER BY display_sort
+
+  LIMIT arg_limit
+$$;
+
+-- END SQLGEN
 
 COMMIT;

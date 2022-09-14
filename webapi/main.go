@@ -5,7 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/filecoin-project/evergreen-dealer/common"
+	cmn "github.com/filecoin-project/evergreen-dealer/common"
+	"github.com/filecoin-project/evergreen-dealer/webapi/types"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/labstack/gommon/log"
@@ -29,26 +30,20 @@ func main() {
 		},
 	))
 
-	// this is our auth-provider
-	e.Use(spidAuth)
-
 	// routes
-	e.GET("eligible_pieces/sp_local", apiListEligible)
-	e.GET("eligible_pieces/anywhere", apiListEligible)
-	e.GET("request_piece/:pieceCID", apiRequestPiece)
-	e.GET("pending_proposals", apiListPendingProposals)
-	e.Any("*", func(c echo.Context) error {
-		return retFail(
-			c,
-			nil,
-			"there is nothing useful at %s",
-			c.Request().RequestURI,
-		)
-	})
+	registerRoutes(e)
 
 	//
 	// Housekeeping
-	ctx, cleanup := common.TopContext(
+	e.Any("*", func(c echo.Context) error {
+		return retFail(
+			c,
+			types.ErrInvalidRequest,
+			"there is nothing at %s",
+			c.Request().RequestURI,
+		)
+	})
+	ctx, cleanup := cmn.TopContext(
 		func() { e.Close() }, //nolint:errcheck
 	)
 	defer cleanup()
@@ -56,8 +51,8 @@ func main() {
 	//
 	// Boot up
 	err := (&cli.App{
-		Name:   common.AppName + "-webapi",
-		Before: common.CliBeforeSetup,
+		Name:   cmn.AppName + "-webapi",
+		Before: cmn.CliBeforeSetup,
 		Action: func(cctx *cli.Context) error { return e.Start(cctx.String("webapi-listen-address")) },
 		Flags: append(
 			[]cli.Flag{
@@ -65,21 +60,21 @@ func main() {
 					Name:  "webapi-listen-address",
 					Value: "localhost:8080",
 				}),
-			}, common.CliFlags...,
+			}, cmn.CliFlags...,
 		),
 	}).RunContext(ctx, os.Args)
 	if err != nil {
-		log.Error(err)
+		log.Errorf("%+v", err)
 	}
 }
 
 var logCfg = fmt.Sprintf("{%s}\n", strings.Join([]string{
 	`"time":"${time_custom}"`,
-	`"requuid":"${header:X-REQUEST-UUID}"`,
+	`"requuid":"${header:X-EGD-REQUEST-UUID}"`,
 	`"error":"${error}"`,
 	`"status":${status}`,
 	`"took":"${latency_human}"`,
-	`"sp":"${header:X-LOGGED-SP}"`,
+	`"sp":"${header:X-EGD-LOGGED-SP}"`,
 	`"bytes_in":${bytes_in}`,
 	`"bytes_out":${bytes_out}`,
 	`"op":"${method} ${host}${uri}"`,

@@ -7,20 +7,21 @@ import (
 	"os"
 	"time"
 
-	"github.com/filecoin-project/evergreen-dealer/common"
+	cmn "github.com/filecoin-project/evergreen-dealer/common"
 	fslock "github.com/ipfs/go-fs-lock"
 	logging "github.com/ipfs/go-log/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	prometheuspush "github.com/prometheus/client_golang/prometheus/push"
 	"github.com/urfave/cli/v2"
+	"golang.org/x/xerrors"
 )
 
-var log = logging.Logger(fmt.Sprintf("%s-cron(%d)", common.AppName, os.Getpid()))
+var log = logging.Logger(fmt.Sprintf("%s-cron(%d)", cmn.AppName, os.Getpid()))
 
 func main() {
 	logging.SetLogLevel("*", "INFO") //nolint:errcheck
 
-	ctx, cleanup := common.TopContext(nil)
+	ctx, cleanup := cmn.TopContext(nil)
 	defer cleanup()
 
 	// wrap in a defer to always capture endstate/send a metric, even under panic()s
@@ -37,7 +38,7 @@ func main() {
 		emitEndLogs := func(logSuccess bool) {
 
 			took := time.Since(t0).Truncate(time.Millisecond)
-			cmdFqName := common.NonAlphanumRun.ReplaceAllString(common.AppName+"_cron_"+currentCmd, `_`)
+			cmdFqName := cmn.NonAlphanumRun.ReplaceAllString(cmn.AppName+"_cron_"+currentCmd, `_`)
 			logHdr := fmt.Sprintf("=== FINISH '%s' run", currentCmd)
 			logArgs := []interface{}{
 				"success", logSuccess,
@@ -62,14 +63,14 @@ func main() {
 				successGauge.Set(0)
 			}
 
-			if common.PromURL != "" {
-				if promErr := prometheuspush.New(common.PromURL, common.NonAlphanumRun.ReplaceAllString(currentCmd, "_")).
-					Grouping("instance", common.NonAlphanumRun.ReplaceAllString(common.PromInstance, "_")).
-					BasicAuth(common.PromUser, common.PromPass).
+			if cmn.PromURL != "" {
+				if promErr := prometheuspush.New(cmn.PromURL, cmn.NonAlphanumRun.ReplaceAllString(currentCmd, "_")).
+					Grouping("instance", cmn.NonAlphanumRun.ReplaceAllString(cmn.PromInstance, "_")).
+					BasicAuth(cmn.PromUser, cmn.PromPass).
 					Collector(tookGauge).
 					Collector(successGauge).
 					Push(); promErr != nil {
-					log.Warnf("push of prometheus metrics to '%s' failed: %s", common.PromURL, promErr)
+					log.Warnf("push of prometheus metrics to '%s' failed: %s", cmn.PromURL, promErr)
 				}
 			}
 		}
@@ -77,20 +78,20 @@ func main() {
 		// a panic condition takes precedence
 		if r := recover(); r != nil {
 			if err == nil {
-				err = fmt.Errorf("panic encountered: %s", r)
+				err = xerrors.Errorf("panic encountered: %s", r)
 			} else {
-				err = fmt.Errorf("panic encountered (in addition to error '%s'): %s", err, r)
+				err = xerrors.Errorf("panic encountered (in addition to error '%w'): %s", err, r)
 			}
 		}
 
 		if err != nil {
 			// if we are not interactive - be quiet on a failed lock
-			if !common.IsTerm && errors.As(err, new(fslock.LockedError)) {
+			if !cmn.IsTerm && errors.As(err, new(fslock.LockedError)) {
 				cleanup()
 				os.Exit(1)
 			}
 
-			log.Error(err)
+			log.Errorf("%+v", err)
 			if currentCmdLock != nil {
 				emitEndLogs(false)
 			}
@@ -103,19 +104,22 @@ func main() {
 
 	t0 = time.Now()
 	// the function ends after this block, err is examined in the defer above
+	// organized in this bizarre way in order to catch panics
 	err = (&cli.App{
-		Name:  common.AppName + "-cron",
-		Usage: "Misc background processes for " + common.AppName,
+		Name:  cmn.AppName + "-cron",
+		Usage: "Misc background processes for " + cmn.AppName,
 		Commands: []*cli.Command{
+			// updateProviders,
 			trackDeals,
 			pushMetrics,
+			signPending,
 			proposePending,
 		},
-		Flags: common.CliFlags,
+		Flags: cmn.CliFlags,
 		// obtains locks and emits the proper init loglines
 		Before: func(cctx *cli.Context) error {
-			if err := common.CliBeforeSetup(cctx); err != nil {
-				return err
+			if err := cmn.CliBeforeSetup(cctx); err != nil {
+				return cmn.WrErr(err)
 			}
 
 			// figure out what is the command that was invoked
@@ -151,8 +155,8 @@ func main() {
 				currentCmd = firstCmdOccurrence
 
 				var err error
-				if currentCmdLock, err = fslock.Lock(os.TempDir(), "evergreen-cron-"+currentCmd); err != nil {
-					return err
+				if currentCmdLock, err = fslock.Lock(os.TempDir(), "egd-cron-"+currentCmd); err != nil {
+					return cmn.WrErr(err)
 				}
 				log.Infow(fmt.Sprintf("=== BEGIN '%s' run", currentCmd))
 			}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,13 +11,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/filecoin-project/evergreen-dealer/common"
+	cmn "github.com/filecoin-project/evergreen-dealer/common"
 	filaddr "github.com/filecoin-project/go-address"
 	filabi "github.com/filecoin-project/go-state-types/abi"
-	"github.com/filecoin-project/go-state-types/crypto"
+	filprovider "github.com/filecoin-project/go-state-types/builtin/v8/miner"
 	filcrypto "github.com/filecoin-project/go-state-types/crypto"
 	lotustypes "github.com/filecoin-project/lotus/chain/types"
-	filprovider "github.com/filecoin-project/specs-actors/actors/builtin/miner"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/labstack/echo/v4"
 )
@@ -40,7 +40,6 @@ type sigChallenge struct {
 
 type verifySigResult struct {
 	invalidSigErrstr string
-	spSize           filabi.SectorSize
 }
 
 var (
@@ -52,17 +51,18 @@ var (
 func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 
-		var challenge sigChallenge
+		ctx := c.Request().Context()
 
+		var challenge sigChallenge
 		challenge.authHdr = c.Request().Header.Get(echo.HeaderAuthorization)
 		res := authRe.FindStringSubmatch(challenge.authHdr)
 		if len(res) != 5 {
 			return retAuthFail(c, "invalid/unexpected FIL-SPID Authorization header '%s'", challenge.authHdr)
 		}
 
-		var err error
 		challenge.hdr.epoch, challenge.hdr.spid, challenge.hdr.sigType, challenge.hdr.sigB64 = res[1], res[2], res[3], res[4]
 
+		var err error
 		challenge.spID, err = filaddr.NewFromString(challenge.hdr.spid)
 		if err != nil {
 			return retAuthFail(c, "unexpected FIL-SPID auth address '%s'", challenge.hdr.spid)
@@ -73,7 +73,7 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 			return retAuthFail(c, "unexpected FIL-SPID auth epoch '%s'", challenge.hdr.epoch)
 		}
 
-		curFilEpoch := int64(common.WallTimeEpoch(time.Now()))
+		curFilEpoch := int64(cmn.WallTimeEpoch(time.Now()))
 		if curFilEpoch < challenge.epoch {
 			return retAuthFail(c, "FIL-SPID auth epoch '%d' is in the future", challenge.epoch)
 		}
@@ -85,9 +85,9 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		if maybeResult, known := challengeCache.Get(challenge.hdr); known {
 			vsr = maybeResult.(verifySigResult)
 		} else {
-			vsr, err = verifySig(c, challenge)
+			vsr, err = verifySig(ctx, challenge)
 			if err != nil {
-				return err
+				return cmn.WrErr(err)
 			}
 			challengeCache.Add(challenge.hdr, vsr)
 		}
@@ -97,54 +97,104 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		// set only on request object for logging, not part of response
-		c.Request().Header.Set("X-LOGGED-SP", challenge.spID.String())
+		c.Request().Header.Set("X-EGD-LOGGED-SP", challenge.spID.String())
 
 		// if challenge.spID.String() == "f01" {
 		// 	challenge.spID, _ = filaddr.NewFromString("f02")
 		// }
 
-		req := c.Request()
+		spID := cmn.MustParseActorString(challenge.spID.String())
+
+		reqCopy := c.Request().Clone(ctx)
+		// do not need to store any IPs anywhere in the DB
+		for _, strip := range []string{
+			"X-Real-Ip", "X-Forwarded-For", "Cf-Connecting-Ip",
+		} {
+			delete(reqCopy.Header, strip)
+		}
 		reqJ, err := json.Marshal(
 			struct {
 				Method  string
+				Host    string
 				URL     *url.URL
 				Headers http.Header
 			}{
-				Method:  req.Method,
-				URL:     req.URL,
-				Headers: req.Header,
+				Method:  reqCopy.Method,
+				Host:    reqCopy.Host,
+				URL:     reqCopy.URL,
+				Headers: reqCopy.Header,
 			},
 		)
 		if err != nil {
-			return err
+			return cmn.WrErr(err)
 		}
 
 		var requestUUID string
-		if err := common.Db.QueryRow(
-			c.Request().Context(),
+		var stateEpoch int64
+		var spDetails []int16
+		if err := cmn.Db.QueryRow(
+			ctx,
 			`
-			INSERT INTO requests ( provider_id, request_dump )
+			INSERT INTO egd.requests ( provider_id, request_dump )
 				VALUES ( $1, $2 )
-			RETURNING request_uuid
+			RETURNING
+				request_uuid,
+				( SELECT ( metadata->'market_state'->'epoch' )::INTEGER FROM egd.global ),
+				(
+					SELECT
+						ARRAY[
+							org_id,
+							city_id,
+							country_id,
+							continent_id,
+							sector_log2_size
+						]
+					FROM egd.providers
+					WHERE provider_id = $1
+				)
 			`,
-			challenge.spID.String(),
+			spID,
 			reqJ,
-		).Scan(&requestUUID); err != nil {
-			return err
+		).Scan(&requestUUID, &stateEpoch, &spDetails); err != nil {
+			return cmn.WrErr(err)
 		}
 
-		// set only on request object for logging, not part of response
-		c.Request().Header.Set("X-REQUEST-UUID", requestUUID)
+		c.Response().Header().Set("X-EGD-FIL-SPID", challenge.spID.String())
 
-		// part of response, also used as globals for rest of request
-		c.Response().Header().Set("X-FIL-SPID", challenge.spID.String())
-		c.Response().Header().Set("X-FIL-SPSIZE", vsr.spSize.String())
+		// set on both request (for logging ) and response object
+		c.Request().Header.Set("X-EGD-REQUEST-UUID", requestUUID)
+		c.Response().Header().Set("X-EGD-REQUEST-UUID", requestUUID)
+
+		c.Set("egd-meta", metaContext{
+			stateEpoch:       stateEpoch,
+			authedActorID:    spID,
+			spOrgID:          spDetails[0],
+			spCityID:         spDetails[1],
+			spCountryID:      spDetails[2],
+			spContinentID:    spDetails[3],
+			spSectorLog2Size: spDetails[4],
+		})
 
 		return next(c)
 	}
 }
 
-func verifySig(c echo.Context, challenge sigChallenge) (verifySigResult, error) {
+type metaContext struct {
+	authedActorID    cmn.ActorID
+	stateEpoch       int64
+	spSectorLog2Size int16
+	spOrgID          int16
+	spCityID         int16
+	spCountryID      int16
+	spContinentID    int16
+}
+
+func unpackAuthedEchoContext(c echo.Context) (context.Context, metaContext) {
+	meta, _ := c.Get("egd-meta").(metaContext) // ignore potential nil error on purpose
+	return c.Request().Context(), meta
+}
+
+func verifySig(ctx context.Context, challenge sigChallenge) (verifySigResult, error) {
 
 	// a worker can only be a BLS key
 	if challenge.hdr.sigType != fmt.Sprintf("%d", filcrypto.SigTypeBLS) {
@@ -160,43 +210,41 @@ func verifySig(c echo.Context, challenge sigChallenge) (verifySigResult, error) 
 		}, nil
 	}
 
-	ctx := c.Request().Context()
-
 	var be *lotustypes.BeaconEntry
 	if protoBe, didFind := beaconCache.Get(challenge.epoch); didFind {
 		be = protoBe.(*lotustypes.BeaconEntry)
 	} else {
-		be, err = common.LotusAPI.BeaconGetEntry(ctx, filabi.ChainEpoch(challenge.epoch))
+		be, err = cmn.LotusAPIHeavy.StateGetBeaconEntry(ctx, filabi.ChainEpoch(challenge.epoch))
 		if err != nil {
-			return verifySigResult{}, err
+			return verifySigResult{}, cmn.WrErr(err)
 		}
 		beaconCache.Add(challenge.epoch, be)
 	}
 
-	miFinTs, err := common.LotusAPI.ChainGetTipSetByHeight(ctx, filabi.ChainEpoch(challenge.epoch)-filprovider.ChainFinality, lotustypes.EmptyTSK)
+	miFinTs, err := cmn.LotusAPICurState.ChainGetTipSetByHeight(ctx, filabi.ChainEpoch(challenge.epoch)-filprovider.ChainFinality, lotustypes.EmptyTSK)
 	if err != nil {
-		return verifySigResult{}, err
+		return verifySigResult{}, cmn.WrErr(err)
 	}
-	mi, err := common.LotusAPI.StateMinerInfo(ctx, challenge.spID, miFinTs.Key())
+	mi, err := cmn.LotusAPICurState.StateMinerInfo(ctx, challenge.spID, miFinTs.Key())
 	if err != nil {
-		return verifySigResult{}, err
+		return verifySigResult{}, cmn.WrErr(err)
 	}
-	workerAddr, err := common.LotusAPI.StateAccountKey(ctx, mi.Worker, miFinTs.Key())
+	workerAddr, err := cmn.LotusAPICurState.StateAccountKey(ctx, mi.Worker, miFinTs.Key())
 	if err != nil {
-		return verifySigResult{}, err
+		return verifySigResult{}, cmn.WrErr(err)
 	}
 
-	sigMatch, err := common.LotusAPI.WalletVerify(
+	sigMatch, err := cmn.LotusAPIHeavy.WalletVerify(
 		ctx,
 		workerAddr,
 		append([]byte{0x20, 0x20, 0x20}, be.Data...),
-		&crypto.Signature{
-			Type: 2,
+		&filcrypto.Signature{
+			Type: filcrypto.SigTypeBLS, // worker keys are always BLS
 			Data: []byte(sig),
 		},
 	)
 	if err != nil {
-		return verifySigResult{}, err
+		return verifySigResult{}, cmn.WrErr(err)
 	}
 	if !sigMatch {
 		return verifySigResult{
@@ -204,5 +252,5 @@ func verifySig(c echo.Context, challenge sigChallenge) (verifySigResult, error) 
 		}, nil
 	}
 
-	return verifySigResult{spSize: mi.SectorSize}, nil
+	return verifySigResult{}, nil
 }

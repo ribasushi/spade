@@ -1,4 +1,4 @@
-package common
+package cmn
 
 import (
 	"context"
@@ -10,8 +10,9 @@ import (
 	"time"
 
 	"github.com/filecoin-project/go-jsonrpc"
+	filbuiltin "github.com/filecoin-project/go-state-types/builtin"
 	lotusapi "github.com/filecoin-project/lotus/api"
-	filactors "github.com/filecoin-project/specs-actors/actors/builtin"
+	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	lslog "github.com/labstack/gommon/log"
 	"github.com/mattn/go-isatty"
@@ -24,8 +25,9 @@ var IsTerm = isatty.IsTerminal(os.Stderr.Fd()) //nolint:revive
 
 // singletons populated on start
 var (
-	LotusAPI            *lotusapi.FullNodeStruct
 	Db                  *pgxpool.Pool
+	LotusAPICurState    *lotusapi.FullNodeStruct
+	LotusAPIHeavy       *lotusapi.FullNodeStruct
 	lotusLookbackEpochs uint
 
 	PromURL  string
@@ -35,11 +37,15 @@ var (
 
 var CliFlags = []cli.Flag{ //nolint:revive
 	altsrc.NewStringFlag(&cli.StringFlag{
-		Name:  "lotus-api",
+		Name:  "lotus-api-curstate",
+		Value: "https://api.chain.love",
+	}),
+	altsrc.NewStringFlag(&cli.StringFlag{
+		Name:  "lotus-api-heavy",
 		Value: "http://localhost:1234",
 	}),
 	altsrc.NewStringFlag(&cli.StringFlag{
-		Name:        "lotus-api-token",
+		Name:        "lotus-api-heavy-token",
 		DefaultText: "  {{ private, read from config file }}  ",
 	}),
 	&cli.UintFlag{
@@ -47,7 +53,7 @@ var CliFlags = []cli.Flag{ //nolint:revive
 		Value: FilDefaultLookback,
 		DefaultText: fmt.Sprintf("%d epochs / %ds",
 			FilDefaultLookback,
-			filactors.EpochDurationSeconds*FilDefaultLookback,
+			filbuiltin.EpochDurationSeconds*FilDefaultLookback,
 		),
 		Destination: &lotusLookbackEpochs,
 	},
@@ -86,6 +92,7 @@ func TopContext(onCleanup func()) (context.Context, func()) { //nolint:revive
 	closer := func() {
 		o.Do(func() {
 			cancel()
+			Db.Close()
 			if onCleanup != nil {
 				onCleanup()
 			}
@@ -110,45 +117,67 @@ func CliBeforeSetup(cctx *cli.Context) error { //nolint:revive
 		func(context *cli.Context) (altsrc.InputSourceContext, error) {
 			hm, err := os.UserHomeDir()
 			if err != nil {
-				return nil, err
+				return nil, WrErr(err)
+
 			}
 			return altsrc.NewTomlSourceFromFile(fmt.Sprintf("%s/%s.toml", hm, AppName))
 		},
 	)(cctx); err != nil {
-		return err
+		return WrErr(err)
 	}
 
 	// init the shared DB connection + lotusapi
 	// can do it here, since now we know the config
 	dbConnCfg, err := pgxpool.ParseConfig(cctx.String("pg-connstring"))
 	if err != nil {
-		return err
+		return WrErr(err)
+	}
+	dbConnCfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+		// _, err := c.Exec(ctx, `SET search_path = egd`)
+		// return WrErr(err)
+		return nil
 	}
 	Db, err = pgxpool.ConnectConfig(cctx.Context, dbConnCfg)
 	if err != nil {
-		return err
+		return WrErr(err)
 	}
 
-	api := new(lotusapi.FullNodeStruct)
-	apiCloser, err := jsonrpc.NewMergeClient(
+	apiCur := new(lotusapi.FullNodeStruct)
+	apiCurCloser, err := jsonrpc.NewMergeClient(
 		cctx.Context,
-		cctx.String("lotus-api")+"/rpc/v0",
+		cctx.String("lotus-api-curstate")+"/rpc/v0",
 		"Filecoin",
-		[]interface{}{&api.Internal, &api.CommonStruct.Internal},
-		http.Header{"Authorization": []string{"Bearer " + cctx.String("lotus-api-token")}},
+		[]interface{}{&apiCur.Internal, &apiCur.CommonStruct.Internal},
+		http.Header{},
 	)
 	if err != nil {
-		return err
+		return WrErr(err)
 	}
+
+	apiHeavy := new(lotusapi.FullNodeStruct)
+	apiHeavyCloser, err := jsonrpc.NewMergeClient(
+		cctx.Context,
+		cctx.String("lotus-api-heavy")+"/rpc/v0",
+		"Filecoin",
+		[]interface{}{&apiHeavy.Internal, &apiHeavy.CommonStruct.Internal},
+		http.Header{"Authorization": []string{"Bearer " + cctx.String("lotus-api-heavy-token")}},
+		jsonrpc.WithTimeout(300*time.Second),
+	)
+	if err != nil {
+		return WrErr(err)
+	}
+
+	LotusAPICurState = apiCur
+	LotusAPIHeavy = apiHeavy
 
 	go func() {
 		<-cctx.Context.Done()
 		if Db != nil {
 			Db.Close()
 		}
-		apiCloser()
+		apiCurCloser()
+		apiHeavyCloser()
 	}()
-	LotusAPI = api
 
 	return nil
 }
