@@ -12,7 +12,7 @@ func refreshMatviews(ctx context.Context, tx pgx.Tx) error {
 	// refresh matviews
 	log.Info("refreshing materialized views")
 	for _, mv := range []string{
-		"mv_deals_prefiltered_for_repcount",
+		"mv_deals_prefiltered_for_repcount", "mv_orglocal_presence",
 		"mv_replicas_continent", "mv_replicas_org", "mv_replicas_city", "mv_replicas_country",
 		"mv_overreplicated_city", "mv_overreplicated_country", "mv_overreplicated_total", "mv_overreplicated_continent", "mv_overreplicated_org",
 		"mv_pieces_availability",

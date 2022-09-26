@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	cmn "github.com/filecoin-project/evergreen-dealer/common"
@@ -19,7 +20,7 @@ type pieceSources struct {
 	HasSourcesHTTP      bool
 }
 
-func injectSources(ctx context.Context, toFill piecePointers) error {
+func injectSources(ctx context.Context, toFill piecePointers, onlyOrg int16) error {
 	if len(toFill) == 0 {
 		return nil
 	}
@@ -38,7 +39,7 @@ func injectSources(ctx context.Context, toFill piecePointers) error {
 	}
 
 	if len(filSrcIDs) > 0 {
-		eg.Go(func() error { return injectActiveFilDAG(ctx, filSrcIDs, toFill, pieceLocks) })
+		eg.Go(func() error { return injectActiveFilDAG(ctx, filSrcIDs, toFill, onlyOrg, pieceLocks) })
 	}
 
 	if err := eg.Wait(); err != nil {
@@ -48,29 +49,41 @@ func injectSources(ctx context.Context, toFill piecePointers) error {
 	return nil
 }
 
-func injectActiveFilDAG(ctx context.Context, ids []int64, ptrs piecePointers, pieceLocks map[int64]*sync.Mutex) error {
+func injectActiveFilDAG(ctx context.Context, ids []int64, ptrs piecePointers, onlyOrg int16, pieceLocks map[int64]*sync.Mutex) error {
+
+	var orgCond string
+	if onlyOrg != 0 {
+		orgCond = fmt.Sprintf(
+			` AND p.org_id = %d`,
+			onlyOrg,
+		)
+	}
 
 	rows, err := cmn.Db.Query(
 		ctx,
-		`
-		SELECT
+		fmt.Sprintf(
+			`
+			SELECT
+					piece_id,
+					deal_id,
+					end_epoch,
+					provider_id,
+					is_filplus,
+					proposal_label
+				FROM egd.known_fildag_deals_ranked kfdr
+				JOIN egd.providers p USING ( provider_id )
+			WHERE
+				rank = 1
+					AND
+				piece_id = ANY ( $1 )%s
+			ORDER BY
 				piece_id,
-				deal_id,
-				end_epoch,
-				provider_id,
-				is_filplus,
-				proposal_label
-			FROM egd.known_fildag_deals_ranked
-		WHERE
-			rank = 1
-				AND
-			piece_id = ANY ( $1 )
-		ORDER BY
-			piece_id,
-			is_filplus DESC,
-			end_epoch DESC,
-			deal_id
-		`,
+				is_filplus DESC,
+				end_epoch DESC,
+				deal_id
+			`,
+			orgCond,
+		),
 		ids,
 	)
 	if err != nil {

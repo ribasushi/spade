@@ -152,7 +152,7 @@ func apiSpListPendingProposals(c echo.Context) error {
 		}
 	}
 
-	if err := injectSources(ctx, srcPtrs); err != nil {
+	if err := injectSources(ctx, srcPtrs, 0); err != nil {
 		return cmn.WrErr(err)
 	}
 

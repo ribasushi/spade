@@ -32,7 +32,11 @@ func apiSpListEligible(c echo.Context) error {
 		tenantID = int16(tid)
 	}
 
+	var restrictToOrgID int16
 	orglocalOnly := truthyBoolQueryParam(c, "orglocal-only")
+	if orglocalOnly {
+		restrictToOrgID = ctxMeta.spOrgID
+	}
 
 	// how to list: start small, find setting below
 	useQueryFunc := "pieces_eligible_head"
@@ -128,7 +132,7 @@ func apiSpListEligible(c echo.Context) error {
 		srcPtrs[p.PieceID] = p.pieceSources
 	}
 
-	if err := injectSources(ctx, srcPtrs); err != nil {
+	if err := injectSources(ctx, srcPtrs, restrictToOrgID); err != nil {
 		return cmn.WrErr(err)
 	}
 

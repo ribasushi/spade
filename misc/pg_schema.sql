@@ -478,6 +478,7 @@ DROP MATERIALIZED VIEW IF EXISTS egd.mv_replicas_country;
 DROP MATERIALIZED VIEW IF EXISTS egd.mv_replicas_continent;
 
 DROP MATERIALIZED VIEW IF EXISTS egd.mv_deals_prefiltered_for_repcount;
+DROP MATERIALIZED VIEW IF EXISTS egd.mv_orglocal_presence;
 
 \timing
 ;
@@ -1397,9 +1398,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_total_idx ON egd.mv_overrepl
 ANALYZE egd.mv_overreplicated_total;
 
 
--- aid the orglocal variant below
-CREATE INDEX IF NOT EXISTS mv_replicas_org_local_idx ON egd.mv_replicas_org ( org_id, piece_id ) WHERE ( claimant_id IS NULL AND replicas_any > 0 );
-ANALYZE egd.mv_replicas_org;
+-- enable the orglocal variant below
+-- this is *distinct* from mv_replicas_org: it lists deals in any live state on chain
+CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_orglocal_presence AS
+  SELECT DISTINCT
+      pd.piece_id,
+      p.org_id
+    FROM egd.published_deals pd
+    JOIN egd.providers p USING ( provider_id )
+    LEFT JOIN egd.invalidated_deals USING ( deal_id )
+  WHERE
+    invalidated_deals.deal_id IS NULL
+      AND
+    pd.status != 'terminated'
+;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_orglocal_presence_key ON egd.mv_orglocal_presence ( org_id, piece_id );
+ANALYZE egd.mv_orglocal_presence;
+
 
 /*
 Templated function in 2 variants:
@@ -1577,15 +1592,11 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS \$\$
         OR
       EXISTS (
         SELECT 42
-          FROM egd.mv_replicas_org ro
+          FROM egd.mv_orglocal_presence op
         WHERE
-          ro.piece_id = pa.piece_id
+          op.piece_id = pa.piece_id
             AND
-          ro.org_id = sp.org_id
-            AND
-          claimant_id IS NULL
-            AND
-          replicas_any > 0
+          op.org_id = sp.org_id
       )
     )
 
@@ -1795,15 +1806,11 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
         OR
       EXISTS (
         SELECT 42
-          FROM egd.mv_replicas_org ro
+          FROM egd.mv_orglocal_presence op
         WHERE
-          ro.piece_id = pa.piece_id
+          op.piece_id = pa.piece_id
             AND
-          ro.org_id = sp.org_id
-            AND
-          claimant_id IS NULL
-            AND
-          replicas_any > 0
+          op.org_id = sp.org_id
       )
     )
 
@@ -2002,15 +2009,11 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
         OR
       EXISTS (
         SELECT 42
-          FROM egd.mv_replicas_org ro
+          FROM egd.mv_orglocal_presence op
         WHERE
-          ro.piece_id = pa.piece_id
+          op.piece_id = pa.piece_id
             AND
-          ro.org_id = sp.org_id
-            AND
-          claimant_id IS NULL
-            AND
-          replicas_any > 0
+          op.org_id = sp.org_id
       )
     )
 
