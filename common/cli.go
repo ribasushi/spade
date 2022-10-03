@@ -92,7 +92,9 @@ func TopContext(onCleanup func()) (context.Context, func()) { //nolint:revive
 	closer := func() {
 		o.Do(func() {
 			cancel()
-			Db.Close()
+			if Db != nil {
+				Db.Close()
+			}
 			if onCleanup != nil {
 				onCleanup()
 			}

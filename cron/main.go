@@ -78,9 +78,9 @@ func main() {
 		// a panic condition takes precedence
 		if r := recover(); r != nil {
 			if err == nil {
-				err = xerrors.Errorf("panic encountered: %s", r)
+				err = xerrors.Errorf("panic encountered: %w", r)
 			} else {
-				err = xerrors.Errorf("panic encountered (in addition to error '%w'): %s", err, r)
+				err = xerrors.Errorf("panic encountered (in addition to error '%s'): %w", err, r)
 			}
 		}
 

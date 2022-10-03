@@ -3,7 +3,7 @@
 // struct and all of its dependencies.
 package types
 
-//go:generate stringer -type=APIErrorCode -output=types_err.go
+//go:generate go run golang.org/x/tools/cmd/stringer -type=APIErrorCode -output=types_err.go
 
 import (
 	"fmt"

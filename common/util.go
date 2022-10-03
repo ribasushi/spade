@@ -51,6 +51,11 @@ func WrErr(err error) error { //nolint:revive
 	if err == nil {
 		return nil
 	}
+	if _, isWrapped := err.(interface {
+		Unwrap() error
+	}); isWrapped {
+		return err
+	}
 	return &cmnErr{err: err, frame: xerrors.Caller(1)}
 }
 func (e *cmnErr) Unwrap() error              { return e.err }
