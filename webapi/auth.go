@@ -28,13 +28,12 @@ const (
 
 type sigChallenge struct {
 	authHdr string
-	spID    filaddr.Address
+	addr    filaddr.Address
 	epoch   int64
 	hdr     struct {
-		epoch   string
-		spid    string
-		sigType string
-		sigB64  string
+		epoch  string
+		addr   string
+		sigB64 string
 	}
 }
 
@@ -43,7 +42,7 @@ type verifySigResult struct {
 }
 
 var (
-	authRe            = regexp.MustCompile(`^` + authScheme + `\s+([0-9]+)\s*;\s*([ft]0[0-9]+)\s*;\s*(2)\s*;\s*([^; ]+)\s*$`)
+	authRe            = regexp.MustCompile(`^` + authScheme + `\s+([0-9]+)\s*;\s*([ft]0[0-9]+)\s*;(?:\s*(2)\s*;)?\s*([^; ]+)\s*$`)
 	challengeCache, _ = lru.New(sigGraceEpochs * 128)
 	beaconCache, _    = lru.New(sigGraceEpochs * 4)
 )
@@ -56,29 +55,33 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		var challenge sigChallenge
 		challenge.authHdr = c.Request().Header.Get(echo.HeaderAuthorization)
 		res := authRe.FindStringSubmatch(challenge.authHdr)
-		if len(res) != 5 {
-			return retAuthFail(c, "invalid/unexpected FIL-SPID Authorization header '%s'", challenge.authHdr)
+
+		// 5 because I was dumb and included the sigtype as part of the challenge
+		if len(res) == 5 {
+			challenge.hdr.epoch, challenge.hdr.addr, _, challenge.hdr.sigB64 = res[1], res[2], res[3], res[4]
+		} else if len(res) == 4 {
+			challenge.hdr.epoch, challenge.hdr.addr, challenge.hdr.sigB64 = res[1], res[2], res[3]
+		} else {
+			return retAuthFail(c, "invalid/unexpected %s Authorization header '%s'", authScheme, challenge.authHdr)
 		}
 
-		challenge.hdr.epoch, challenge.hdr.spid, challenge.hdr.sigType, challenge.hdr.sigB64 = res[1], res[2], res[3], res[4]
-
 		var err error
-		challenge.spID, err = filaddr.NewFromString(challenge.hdr.spid)
+		challenge.addr, err = filaddr.NewFromString(challenge.hdr.addr)
 		if err != nil {
-			return retAuthFail(c, "unexpected FIL-SPID auth address '%s'", challenge.hdr.spid)
+			return retAuthFail(c, "unexpected %s auth address '%s'", authScheme, challenge.hdr.addr)
 		}
 
 		challenge.epoch, err = strconv.ParseInt(challenge.hdr.epoch, 10, 32)
 		if err != nil {
-			return retAuthFail(c, "unexpected FIL-SPID auth epoch '%s'", challenge.hdr.epoch)
+			return retAuthFail(c, "unexpected %s auth epoch '%s'", authScheme, challenge.hdr.epoch)
 		}
 
 		curFilEpoch := int64(cmn.WallTimeEpoch(time.Now()))
 		if curFilEpoch < challenge.epoch {
-			return retAuthFail(c, "FIL-SPID auth epoch '%d' is in the future", challenge.epoch)
+			return retAuthFail(c, "%s auth epoch '%d' is in the future", authScheme, challenge.epoch)
 		}
 		if curFilEpoch-challenge.epoch > sigGraceEpochs {
-			return retAuthFail(c, "FIL-SPID auth epoch '%d' is too far in the past", challenge.epoch)
+			return retAuthFail(c, "%s auth epoch '%d' is too far in the past", authScheme, challenge.epoch)
 		}
 
 		var vsr verifySigResult
@@ -97,13 +100,13 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		// set only on request object for logging, not part of response
-		c.Request().Header.Set("X-EGD-LOGGED-SP", challenge.spID.String())
+		c.Request().Header.Set("X-EGD-LOGGED-SP", challenge.addr.String())
 
-		// if challenge.spID.String() == "f01" {
-		// 	challenge.spID, _ = filaddr.NewFromString("f02")
+		// if challenge.addr.String() == "f01" {
+		// 	challenge.addr, _ = filaddr.NewFromString("f02")
 		// }
 
-		spID := cmn.MustParseActorString(challenge.spID.String())
+		spID := cmn.MustParseActorString(challenge.addr.String())
 
 		reqCopy := c.Request().Clone(ctx)
 		// do not need to store any IPs anywhere in the DB
@@ -159,7 +162,7 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 			return cmn.WrErr(err)
 		}
 
-		c.Response().Header().Set("X-EGD-FIL-SPID", challenge.spID.String())
+		c.Response().Header().Set("X-EGD-FIL-SPID", challenge.addr.String())
 
 		// set on both request (for logging ) and response object
 		c.Request().Header.Set("X-EGD-REQUEST-UUID", requestUUID)
@@ -196,17 +199,10 @@ func unpackAuthedEchoContext(c echo.Context) (context.Context, metaContext) {
 
 func verifySig(ctx context.Context, challenge sigChallenge) (verifySigResult, error) {
 
-	// a worker can only be a BLS key
-	if challenge.hdr.sigType != fmt.Sprintf("%d", filcrypto.SigTypeBLS) {
-		return verifySigResult{
-			invalidSigErrstr: fmt.Sprintf("unexpected FIL-SPID auth signature type '%s'", challenge.hdr.sigType),
-		}, nil
-	}
-
 	sig, err := base64.StdEncoding.DecodeString(challenge.hdr.sigB64)
 	if err != nil {
 		return verifySigResult{
-			invalidSigErrstr: fmt.Sprintf("unexpected FIL-SPID auth signature encoding '%s'", challenge.hdr.sigB64),
+			invalidSigErrstr: fmt.Sprintf("unexpected %s auth signature encoding '%s'", authScheme, challenge.hdr.sigB64),
 		}, nil
 	}
 
@@ -225,7 +221,7 @@ func verifySig(ctx context.Context, challenge sigChallenge) (verifySigResult, er
 	if err != nil {
 		return verifySigResult{}, cmn.WrErr(err)
 	}
-	mi, err := cmn.LotusAPICurState.StateMinerInfo(ctx, challenge.spID, miFinTs.Key())
+	mi, err := cmn.LotusAPICurState.StateMinerInfo(ctx, challenge.addr, miFinTs.Key())
 	if err != nil {
 		return verifySigResult{}, cmn.WrErr(err)
 	}
@@ -246,11 +242,11 @@ func verifySig(ctx context.Context, challenge sigChallenge) (verifySigResult, er
 	if err != nil {
 		return verifySigResult{}, cmn.WrErr(err)
 	}
+
 	if !sigMatch {
 		return verifySigResult{
-			invalidSigErrstr: fmt.Sprintf("FIL-SPID signature validation failed for auth header '%s'", challenge.authHdr),
+			invalidSigErrstr: fmt.Sprintf("%s signature validation failed for auth header '%s'", authScheme, challenge.authHdr),
 		}, nil
 	}
-
 	return verifySigResult{}, nil
 }
