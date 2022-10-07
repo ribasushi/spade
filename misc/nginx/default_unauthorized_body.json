@@ -17,8 +17,8 @@
     " the algorithm description at the top of the reference authenticator.                                                    ",
     "                                                                                                                         ",
     " Authenticator can be used like this:                                                                                    ",
-    "  curl -OL https://raw.githubusercontent.com/filecoin-project/evergreen-dealer/master/misc/fil-spid.bash                 ",
-    "  chmod 755 fil-spid.bash                                                                                                ",
-    "  echo curl -sLH \"Authorization: $( ./fil-spid.bash f0XXXX )\" https://api.evergreen.filecoin.io/pending_proposals | sh "
+    "  curl -OL https://raw.githubusercontent.com/filecoin-project/evergreen-dealer/master/misc/fil-spid.bash ",
+    "  chmod 755 fil-spid.bash ",
+    "  echo curl -sLH \"Authorization: $( ./fil-spid.bash f0XXXX )\" https://<!--# echo var="host" -->/pending_proposals | sh "
   ]
 }
