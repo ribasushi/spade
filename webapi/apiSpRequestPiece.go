@@ -289,7 +289,7 @@ func apiSpRequestPiece(c echo.Context) error {
 			ctx,
 			`
 			INSERT INTO egd.proposals
-				( piece_id, provider_id, client_id, start_epoch, end_epoch, piece_log2_size, proposal_meta )
+				( piece_id, provider_id, client_id, start_epoch, end_epoch, proxied_log2_size, proposal_meta )
 			VALUES ( $1, $2, $3, $4, $5, $6, $7 )
 			`,
 			chosenTenant.PieceID,

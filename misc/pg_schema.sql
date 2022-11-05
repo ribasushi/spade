@@ -135,9 +135,10 @@ CREATE TABLE IF NOT EXISTS egd.pieces (
   piece_log2_size SMALLINT NOT NULL CONSTRAINT piece_valid_size CHECK ( piece_log2_size > 0 ),
   proposal_label TEXT CONSTRAINT piece_valid_lcid CHECK ( egd.valid_cid( proposal_label ) ),
   piece_meta JSONB NOT NULL DEFAULT '{}',
-  CONSTRAINT pieces_piece_size_key UNIQUE ( piece_id, piece_log2_size ), -- needed for the proposals FK
-  CONSTRAINT pieces_piece_cid_size_key UNIQUE ( piece_log2_size, piece_id, piece_cid ) -- needed for the published_deals FK
+  CONSTRAINT pieces_piece_size_key UNIQUE ( piece_log2_size, piece_id ), -- proposals FK
+  CONSTRAINT pieces_piece_id_cid_key UNIQUE ( piece_id, piece_cid ) -- published_deals FK
 );
+CREATE INDEX IF NOT EXISTS pieces_unproven_size ON egd.pieces ( piece_id ) WHERE ( NOT COALESCE( (piece_meta->'size_proven_correct')::BOOL, false) );
 CREATE OR REPLACE
   FUNCTION egd.prefill_piece_id() RETURNS TRIGGER
     LANGUAGE plpgsql
@@ -226,7 +227,7 @@ CREATE TABLE IF NOT EXISTS egd.published_deals (
   deal_id BIGINT UNIQUE NOT NULL CONSTRAINT deal_valid_id CHECK ( deal_id > 0 ),
   piece_id BIGINT NOT NULL,
   piece_cid TEXT NOT NULL,
-  piece_log2_size BIGINT NOT NULL CONSTRAINT piece_valid_size CHECK ( piece_log2_size > 0 ),
+  claimed_log2_size BIGINT NOT NULL CONSTRAINT piece_valid_size CHECK ( claimed_log2_size > 0 ),
   provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
   client_id INTEGER NOT NULL REFERENCES egd.clients ( client_id ),
   label BYTEA NOT NULL,
@@ -238,10 +239,11 @@ CREATE TABLE IF NOT EXISTS egd.published_deals (
   end_epoch INTEGER NOT NULL CONSTRAINT deal_valid_end CHECK ( end_epoch > 0 ),
   sector_start_epoch INTEGER CONSTRAINT deal_valid_sector_start CHECK ( sector_start_epoch > 0 ),
   entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  CONSTRAINT piece_combo_fkey FOREIGN KEY ( piece_log2_size, piece_id, piece_cid ) REFERENCES egd.pieces ( piece_log2_size, piece_id, piece_cid ) ON UPDATE CASCADE
+  CONSTRAINT piece_id_cid_fkey FOREIGN KEY ( piece_id, piece_cid ) REFERENCES egd.pieces ( piece_id, piece_cid ) ON UPDATE CASCADE
 );
 CREATE INDEX IF NOT EXISTS published_deals_piece_id_idx ON egd.published_deals ( piece_id );
 CREATE INDEX IF NOT EXISTS published_deals_status ON egd.published_deals ( status, piece_id, is_filplus, provider_id );
+CREATE INDEX IF NOT EXISTS published_deals_active ON egd.published_deals ( piece_id ) INCLUDE ( claimed_log2_size ) WHERE ( status = 'active' );
 CREATE INDEX IF NOT EXISTS published_deals_fildag ON egd.published_deals ( piece_id ) WHERE (
     status = 'active'
       AND
@@ -259,17 +261,30 @@ BEGIN
   INSERT INTO egd.clients( client_id ) VALUES ( NEW.client_id ) ON CONFLICT DO NOTHING;
   INSERT INTO egd.providers( provider_id ) VALUES ( NEW.provider_id ) ON CONFLICT DO NOTHING;
   IF NEW.piece_id IS NULL THEN
-    INSERT INTO egd.pieces( piece_cid, piece_log2_size ) VALUES ( NEW.piece_cid, NEW.piece_log2_size ) ON CONFLICT DO NOTHING;
+    INSERT INTO egd.pieces( piece_cid, piece_log2_size ) VALUES ( NEW.piece_cid, NEW.claimed_log2_size ) ON CONFLICT DO NOTHING;
     NEW.piece_id = ( SELECT piece_id FROM egd.pieces WHERE piece_cid = NEW.piece_cid );
   END IF;
   RETURN NEW;
  END;
- $$;
+$$;
 CREATE OR REPLACE TRIGGER trigger_init_deal_relations
   BEFORE INSERT ON egd.published_deals
   FOR EACH ROW
   EXECUTE PROCEDURE egd.init_deal_relations()
 ;
+
+CREATE OR REPLACE VIEW egd.known_missized_deals AS (
+  SELECT
+      pd.*,
+      p.piece_log2_size AS proven_log2_size
+    FROM egd.published_deals pd, egd.pieces p
+  WHERE
+    pd.piece_id = p.piece_id
+      AND
+    pd.claimed_log2_size != p.piece_log2_size
+      AND
+    (p.piece_meta->'size_proven_correct')::BOOL
+);
 
 CREATE TABLE IF NOT EXISTS egd.invalidated_deals (
   deal_id BIGINT NOT NULL UNIQUE REFERENCES egd.published_deals ( deal_id ),
@@ -293,11 +308,11 @@ CREATE TABLE IF NOT EXISTS egd.proposals (
   start_epoch INTEGER NOT NULL,
   end_epoch INTEGER NOT NULL,
 
-  piece_log2_size SMALLINT NOT NULL,
+  proxied_log2_size SMALLINT NOT NULL,
 
   proposal_meta JSONB NOT NULL DEFAULT '{}',
 
-  CONSTRAINT proposal_piece_combo_fkey FOREIGN KEY ( piece_id, piece_log2_size ) REFERENCES egd.pieces ( piece_id, piece_log2_size ) ON UPDATE CASCADE,
+  CONSTRAINT proposal_piece_combo_fkey FOREIGN KEY ( piece_id, proxied_log2_size ) REFERENCES egd.pieces ( piece_id, piece_log2_size ) ON UPDATE CASCADE,
   CONSTRAINT proposal_singleton_pending_piece UNIQUE ( provider_id, piece_id, proposal_failstamp ),
   CONSTRAINT proposal_annotated_failure CHECK ( (proposal_failstamp = 0) = (proposal_meta->'failure' IS NULL) )
 );
@@ -307,7 +322,7 @@ CREATE OR REPLACE TRIGGER trigger_proposal_update_ts
   EXECUTE PROCEDURE egd.update_entry_timestamp()
 ;
 CREATE INDEX IF NOT EXISTS proposals_piece_idx ON egd.proposals ( piece_id );
-CREATE INDEX IF NOT EXISTS proposals_pending ON egd.proposals ( piece_id, provider_id, client_id ) INCLUDE ( piece_log2_size ) WHERE ( proposal_failstamp = 0 AND activated_deal_id IS NULL );
+CREATE INDEX IF NOT EXISTS proposals_pending ON egd.proposals ( piece_id, provider_id, client_id ) INCLUDE ( proxied_log2_size ) WHERE ( proposal_failstamp = 0 AND activated_deal_id IS NULL );
 
 -- Used exclusively for the `FilecoinDAG` portion of a response and corresponding availability matview
 CREATE OR REPLACE VIEW egd.known_fildag_deals_ranked AS (
@@ -350,7 +365,7 @@ CREATE OR REPLACE VIEW egd.clients_datacap_available AS
         -
       COALESCE(
         (
-        SELECT SUM( 1::BIGINT << pr.piece_log2_size )
+        SELECT SUM( 1::BIGINT << pr.proxied_log2_size )
           FROM egd.proposals pr
         WHERE
           pr.proposal_failstamp = 0
@@ -617,7 +632,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
           COALESCE(
             (
-              SELECT SUM( 1::BIGINT << pr.piece_log2_size )
+              SELECT SUM( 1::BIGINT << pr.proxied_log2_size )
                 FROM ctx, egd.proposals pr
               WHERE
                 pr.provider_id = ctx.provider_id

@@ -44,7 +44,7 @@ delete $schema->source('PublishedDeal')->{_relationships}{$_} for qw( proposal i
 
 use Devel::Dwarn;
 
-my $views = [qw( clients_datacap_available known_fildag_deals_ranked known_deals_ranked )];
+my $views = [qw( clients_datacap_available known_fildag_deals_ranked known_deals_ranked known_missized_deals )];
 
 # this entire block exists solely to add all kinds of artificial "relationships"
 # so that the diagram kinda-sorta makes sense

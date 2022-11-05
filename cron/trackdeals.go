@@ -268,7 +268,7 @@ var trackDeals = &cli.Command{
 					ctx,
 					`
 					INSERT INTO egd.published_deals
-						( deal_id, client_id, provider_id, piece_cid, piece_log2_size, label, decoded_label, is_filplus, status, published_deal_meta, start_epoch, end_epoch, sector_start_epoch )
+						( deal_id, client_id, provider_id, piece_cid, claimed_log2_size, label, decoded_label, is_filplus, status, published_deal_meta, start_epoch, end_epoch, sector_start_epoch )
 						VALUES ( $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::JSONB, $11, $12, $13 )
 					ON CONFLICT ( deal_id ) DO UPDATE SET
 						status = EXCLUDED.status,
@@ -361,6 +361,31 @@ var trackDeals = &cli.Command{
 				); err != nil {
 					return cmn.WrErr(err)
 				}
+			}
+
+			// anything that activated is obviously the correct size
+			if _, err := tx.Exec(
+				ctx,
+				`
+				UPDATE egd.pieces SET piece_meta = piece_meta || '{ "size_proven_correct":true }',
+						piece_log2_size = active.proven_log2_size
+					FROM (
+						SELECT pd.piece_id, pd.claimed_log2_size AS proven_log2_size
+							FROM egd.published_deals pd, egd.pieces p
+						WHERE
+							( NOT COALESCE( (p.piece_meta->'size_proven_correct')::BOOL, false) )
+								AND
+							pd.piece_id = p.piece_id
+								AND
+							pd.status = 'active'
+					) active
+				WHERE
+					( NOT COALESCE( (pieces.piece_meta->'size_proven_correct')::BOOL, false) )
+						AND
+					pieces.piece_id = active.piece_id
+				`,
+			); err != nil {
+				return cmn.WrErr(err)
 			}
 
 			// clear out proposals that will never make it

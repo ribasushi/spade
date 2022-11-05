@@ -44,7 +44,7 @@ func apiSpListPendingProposals(c echo.Context) error {
 				pr.proposal_delivered,
 				c.tenant_id,
 				p.piece_cid,
-				pr.piece_log2_size,
+				pr.proxied_log2_size AS piece_log2_size,
 				pr.proposal_failstamp,
 				pr.proposal_meta->>'failure' AS error,
 				( EXISTS (
@@ -81,7 +81,7 @@ func apiSpListPendingProposals(c echo.Context) error {
 		ORDER BY
 			pr.proposal_failstamp DESC,
 			( pr.start_epoch / 360 ), -- 3h sort granularity
-			pr.piece_log2_size,
+			pr.proxied_log2_size,
 			p.piece_cid
 		`,
 		ctxMeta.authedActorID,
