@@ -9,7 +9,6 @@ import (
 	"github.com/filecoin-project/evergreen-dealer/webapi/types"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/labstack/gommon/log"
 	"github.com/urfave/cli/v2"
 	"github.com/urfave/cli/v2/altsrc"
 )
@@ -21,7 +20,7 @@ func main() {
 	e := echo.New()
 
 	// logging middleware must be first
-	e.Logger.SetLevel(log.INFO)
+	e.Logger.SetLevel(2) // https://github.com/labstack/gommon/blob/v0.4.0/log/log.go#L40-L42
 	e.Use(middleware.LoggerWithConfig(
 		middleware.LoggerConfig{
 			Skipper:          middleware.DefaultSkipper,
@@ -43,7 +42,7 @@ func main() {
 			c.Request().RequestURI,
 		)
 	})
-	ctx, cleanup := cmn.TopContext(
+	ctx, cleanup := cmn.TopAppContext(
 		func() { e.Close() }, //nolint:errcheck
 	)
 	defer cleanup()
@@ -64,7 +63,7 @@ func main() {
 		),
 	}).RunContext(ctx, os.Args)
 	if err != nil {
-		log.Errorf("%+v", err)
+		e.Logger.Errorf("%+v", err)
 	}
 }
 

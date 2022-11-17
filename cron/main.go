@@ -19,9 +19,7 @@ import (
 var log = logging.Logger(fmt.Sprintf("%s-cron(%d)", cmn.AppName, os.Getpid()))
 
 func main() {
-	logging.SetLogLevel("*", "INFO") //nolint:errcheck
-
-	ctx, cleanup := cmn.TopContext(nil)
+	ctx, cleanup := cmn.TopAppContext(nil)
 	defer cleanup()
 
 	// wrap in a defer to always capture endstate/send a metric, even under panic()s

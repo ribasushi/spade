@@ -12,7 +12,7 @@ import (
 	filbuiltin "github.com/filecoin-project/go-state-types/builtin"
 	lotusbuild "github.com/filecoin-project/lotus/build"
 	lotustypes "github.com/filecoin-project/lotus/chain/types"
-	lru "github.com/hashicorp/golang-lru"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"golang.org/x/xerrors"
 )
 
@@ -83,11 +83,11 @@ func DefaultLookbackTipset(ctx context.Context) (*lotustypes.TipSet, error) { //
 	return tipsetAtLookback, nil
 }
 
-var collateralCache, _ = lru.New(128)
+var collateralCache, _ = lru.New[filabi.ChainEpoch, filbig.Int](128)
 
 func GiBProviderCollateralEstimate(ctx context.Context, sourceEpoch filabi.ChainEpoch) (filbig.Int, error) { //nolint:revive
-	if protoPC, didFind := collateralCache.Get(sourceEpoch); didFind {
-		return protoPC.(filbig.Int), nil
+	if pc, didFind := collateralCache.Get(sourceEpoch); didFind {
+		return pc, nil
 	}
 
 	ts, err := LotusAPIHeavy.ChainGetTipSetByHeight(ctx, sourceEpoch, lotustypes.EmptyTSK)

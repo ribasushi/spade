@@ -17,7 +17,7 @@ import (
 	filprovider "github.com/filecoin-project/go-state-types/builtin/v8/miner"
 	filcrypto "github.com/filecoin-project/go-state-types/crypto"
 	lotustypes "github.com/filecoin-project/lotus/chain/types"
-	lru "github.com/hashicorp/golang-lru"
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/labstack/echo/v4"
 )
 
@@ -26,15 +26,16 @@ const (
 	authScheme     = `FIL-SPID-V0`
 )
 
+type rawHdr struct {
+	epoch  string
+	addr   string
+	sigB64 string
+}
 type sigChallenge struct {
 	authHdr string
 	addr    filaddr.Address
 	epoch   int64
-	hdr     struct {
-		epoch  string
-		addr   string
-		sigB64 string
-	}
+	hdr     rawHdr
 }
 
 type verifySigResult struct {
@@ -43,8 +44,8 @@ type verifySigResult struct {
 
 var (
 	authRe            = regexp.MustCompile(`^` + authScheme + `\s+([0-9]+)\s*;\s*([ft]0[0-9]+)\s*;(?:\s*(2)\s*;)?\s*([^; ]+)\s*$`)
-	challengeCache, _ = lru.New(sigGraceEpochs * 128)
-	beaconCache, _    = lru.New(sigGraceEpochs * 4)
+	challengeCache, _ = lru.New[rawHdr, verifySigResult](sigGraceEpochs * 128)
+	beaconCache, _    = lru.New[int64, *lotustypes.BeaconEntry](sigGraceEpochs * 4)
 )
 
 func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
@@ -86,7 +87,7 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 
 		var vsr verifySigResult
 		if maybeResult, known := challengeCache.Get(challenge.hdr); known {
-			vsr = maybeResult.(verifySigResult)
+			vsr = maybeResult
 		} else {
 			vsr, err = verifySig(ctx, challenge)
 			if err != nil {
@@ -206,10 +207,8 @@ func verifySig(ctx context.Context, challenge sigChallenge) (verifySigResult, er
 		}, nil
 	}
 
-	var be *lotustypes.BeaconEntry
-	if protoBe, didFind := beaconCache.Get(challenge.epoch); didFind {
-		be = protoBe.(*lotustypes.BeaconEntry)
-	} else {
+	be, didFind := beaconCache.Get(challenge.epoch)
+	if !didFind {
 		be, err = cmn.LotusAPIHeavy.StateGetBeaconEntry(ctx, filabi.ChainEpoch(challenge.epoch))
 		if err != nil {
 			return verifySigResult{}, cmn.WrErr(err)

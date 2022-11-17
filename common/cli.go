@@ -12,16 +12,19 @@ import (
 	"github.com/filecoin-project/go-jsonrpc"
 	filbuiltin "github.com/filecoin-project/go-state-types/builtin"
 	lotusapi "github.com/filecoin-project/lotus/api"
+	logging "github.com/ipfs/go-log/v2"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
-	lslog "github.com/labstack/gommon/log"
 	"github.com/mattn/go-isatty"
 	"github.com/urfave/cli/v2"
 	"github.com/urfave/cli/v2/altsrc"
 	"golang.org/x/sys/unix"
 )
 
-var IsTerm = isatty.IsTerminal(os.Stderr.Fd()) //nolint:revive
+var (
+	IsTerm = isatty.IsTerminal(os.Stderr.Fd()) //nolint:revive
+	log    = logging.Logger(fmt.Sprintf("%s(%d)", AppName, os.Getpid()))
+)
 
 // singletons populated on start
 var (
@@ -85,7 +88,15 @@ var CliFlags = []cli.Flag{ //nolint:revive
 	}),
 }
 
-func TopContext(onCleanup func()) (context.Context, func()) { //nolint:revive
+func TopAppContext(onCleanup func()) (context.Context, func()) { //nolint:revive
+
+	logging.SetLogLevel("*", "INFO") //nolint:errcheck
+
+	// when using lp2p this will fire arbitrarily driven by rand()
+	// there is no value doing so in a CLI setting
+	// https://github.com/libp2p/go-libp2p/blob/master/core/canonicallog/canonicallog.go
+	logging.SetLogLevel("canonical-log", "ERROR") //nolint:errcheck
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var o sync.Once
@@ -106,7 +117,7 @@ func TopContext(onCleanup func()) (context.Context, func()) { //nolint:revive
 		sigs := make(chan os.Signal, 1)
 		signal.Notify(sigs, unix.SIGINT, unix.SIGTERM)
 		<-sigs
-		lslog.Warn("termination signal received, cleaning up...")
+		log.Warn("termination signal received, cleaning up...")
 		closer()
 	}()
 

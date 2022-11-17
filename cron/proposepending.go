@@ -8,15 +8,18 @@ import (
 	"time"
 
 	cmn "github.com/filecoin-project/evergreen-dealer/common"
-	filaddr "github.com/filecoin-project/go-address"
-	lotusmarket "github.com/filecoin-project/go-fil-markets/storagemarket"
-	filmarket "github.com/filecoin-project/go-state-types/builtin/v8/market"
-	filcrypto "github.com/filecoin-project/go-state-types/crypto"
-	lotusapi "github.com/filecoin-project/lotus/api"
 	"github.com/georgysavva/scany/pgxscan"
+	"github.com/google/uuid"
 	"github.com/ipfs/go-cid"
 	"github.com/urfave/cli/v2"
 	"golang.org/x/sync/errgroup"
+
+	filaddr "github.com/filecoin-project/go-address"
+	filmarket "github.com/filecoin-project/go-state-types/builtin/v9/market"
+	filcrypto "github.com/filecoin-project/go-state-types/crypto"
+
+	lotusmarket "github.com/filecoin-project/go-fil-markets/storagemarket"
+	lotusapi "github.com/filecoin-project/lotus/api"
 )
 
 type deliveryMethod int
@@ -32,7 +35,7 @@ type proposalTotals struct {
 	failed          *int32
 }
 type proposalPending struct {
-	ProposalUUID      string
+	ProposalUUID      uuid.UUID
 	ProposalLabel     string
 	ProposalPayload   filmarket.DealProposal
 	ProposalSignature filcrypto.Signature
