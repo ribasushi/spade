@@ -69,16 +69,6 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE
-  FUNCTION egd.record_metric_change() RETURNS TRIGGER
-    LANGUAGE plpgsql
-AS $$
-BEGIN
-  INSERT INTO egd.metrics_log ( name, dimensions, value, collected_at, collection_took_seconds ) VALUES ( NEW.name, NEW.dimensions, NEW.value, NEW.collected_at, NEW.collection_took_seconds );
-  RETURN NULL;
-END;
-$$;
-
 
 CREATE TABLE IF NOT EXISTS egd.metrics (
   name TEXT NOT NULL CONSTRAINT metric_name_lc CHECK ( name ~ '^[a-z0-9_]+$' ),
@@ -89,11 +79,6 @@ CREATE TABLE IF NOT EXISTS egd.metrics (
   collection_took_seconds NUMERIC NOT NULL,
   CONSTRAINT metric_uidx UNIQUE ( name, dimensions )
 );
-CREATE OR REPLACE TRIGGER trigger_store_metric_logs
-  AFTER INSERT OR UPDATE ON egd.metrics
-  FOR EACH ROW
-  EXECUTE PROCEDURE egd.record_metric_change()
-;
 CREATE TABLE IF NOT EXISTS egd.metrics_log (
   name TEXT NOT NULL,
   dimensions TEXT[][] NOT NULL,
@@ -103,6 +88,20 @@ CREATE TABLE IF NOT EXISTS egd.metrics_log (
   CONSTRAINT metrics_log_metric_fk FOREIGN KEY ( name, dimensions ) REFERENCES egd.metrics ( name, dimensions )
 );
 CREATE INDEX IF NOT EXISTS metrics_log_collected_name_dim ON egd.metrics_log ( collected_at, name );
+CREATE OR REPLACE
+  FUNCTION egd.record_metric_change() RETURNS TRIGGER
+    LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO egd.metrics_log ( name, dimensions, value, collected_at, collection_took_seconds ) VALUES ( NEW.name, NEW.dimensions, NEW.value, NEW.collected_at, NEW.collection_took_seconds );
+  RETURN NULL;
+END;
+$$;
+CREATE OR REPLACE TRIGGER trigger_store_metric_logs
+  AFTER INSERT OR UPDATE ON egd.metrics
+  FOR EACH ROW
+  EXECUTE PROCEDURE egd.record_metric_change()
+;
 
 CREATE TABLE IF NOT EXISTS egd.global(
   singleton_row BOOL NOT NULL UNIQUE CONSTRAINT single_row_in_table CHECK ( singleton_row IS TRUE ),

@@ -1,4 +1,4 @@
-package cmn
+package cmn //nolint:revive
 
 import (
 	"context"

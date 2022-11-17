@@ -4,6 +4,9 @@ go 1.19
 
 replace github.com/filecoin-project/evergreen-dealer/webapi/types => ./webapi/types
 
+// temporarily ensure no boost dep creeps in
+replace github.com/filecoin-project/boost => /dev/null
+
 require (
 	github.com/dgraph-io/ristretto v0.1.1
 	github.com/dustin/go-humanize v1.0.0

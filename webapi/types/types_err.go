@@ -8,9 +8,6 @@ func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
-	_ = x[ErrInvalidRequest-4400]
-	_ = x[ErrUnauthorizedAccess-4401]
-	_ = x[ErrSystemTemporarilyDisabled-4503]
 	_ = x[ErrOversizedPiece-4011]
 	_ = x[ErrStorageProviderSuspended-4012]
 	_ = x[ErrStorageProviderIneligibleToMine-4013]
@@ -21,6 +18,9 @@ func _() {
 	_ = x[ErrProviderAboveMaxInFlight-4024]
 	_ = x[ErrReplicationRulesViolation-4029]
 	_ = x[ErrExternalReservationRefused-4030]
+	_ = x[ErrInvalidRequest-4400]
+	_ = x[ErrUnauthorizedAccess-4401]
+	_ = x[ErrSystemTemporarilyDisabled-4503]
 }
 
 const (
