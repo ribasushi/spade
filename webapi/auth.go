@@ -31,11 +31,13 @@ type rawHdr struct {
 	epoch  string
 	addr   string
 	sigB64 string
+	arg    string
 }
 type sigChallenge struct {
 	authHdr string
 	addr    filaddr.Address
 	epoch   int64
+	arg     []byte
 	hdr     rawHdr
 }
 
@@ -44,7 +46,20 @@ type verifySigResult struct {
 }
 
 var (
-	authRe            = regexp.MustCompile(`^` + authScheme + `\s+([0-9]+)\s*;\s*([ft]0[0-9]+)\s*;(?:\s*(2)\s*;)?\s*([^; ]+)\s*$`)
+	spAuthRe = regexp.MustCompile(
+		`^` + authScheme + `\s+` +
+			// fil epoch
+			`([0-9]+)` + `\s*;\s*` +
+			// spID
+			`([ft]0[0-9]+)` + `\s*;\s*` +
+			// legacy crap, remove once contract signing in place for everyone
+			`(?:\s*2\s*;)?` +
+			// signature
+			`([^; ]+)` +
+			// optional signed argument
+			`(?:\s*\;\s*([^; ]+))?` +
+			`\s*$`,
+	)
 	challengeCache, _ = lru.New[rawHdr, verifySigResult](sigGraceEpochs * 128)
 	beaconCache, _    = lru.New[int64, *lotustypes.BeaconEntry](sigGraceEpochs * 4)
 )
@@ -56,13 +71,10 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 
 		var challenge sigChallenge
 		challenge.authHdr = c.Request().Header.Get(echo.HeaderAuthorization)
-		res := authRe.FindStringSubmatch(challenge.authHdr)
+		res := spAuthRe.FindStringSubmatch(challenge.authHdr)
 
-		// 5 because I was dumb and included the sigtype as part of the challenge
 		if len(res) == 5 {
-			challenge.hdr.epoch, challenge.hdr.addr, _, challenge.hdr.sigB64 = res[1], res[2], res[3], res[4]
-		} else if len(res) == 4 {
-			challenge.hdr.epoch, challenge.hdr.addr, challenge.hdr.sigB64 = res[1], res[2], res[3]
+			challenge.hdr.epoch, challenge.hdr.addr, challenge.hdr.sigB64, challenge.hdr.arg = res[1], res[2], res[3], res[4]
 		} else {
 			return retAuthFail(c, "invalid/unexpected %s Authorization header '%s'", authScheme, challenge.authHdr)
 		}
@@ -84,6 +96,11 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 		if curFilEpoch-challenge.epoch > sigGraceEpochs {
 			return retAuthFail(c, "%s auth epoch '%d' is too far in the past", authScheme, challenge.epoch)
+		}
+
+		challenge.arg, err = base64.StdEncoding.DecodeString(challenge.hdr.arg)
+		if err != nil {
+			return retAuthFail(c, "unable to decode optional argument: %s", err.Error())
 		}
 
 		var vsr verifySigResult
@@ -184,6 +201,7 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		c.Set("egd-meta", metaContext{
 			stateEpoch:       stateEpoch,
 			authedActorID:    spID,
+			authArg:          challenge.arg,
 			spOrgID:          spDetails[0],
 			spCityID:         spDetails[1],
 			spCountryID:      spDetails[2],
@@ -205,6 +223,7 @@ type metaContext struct {
 	spCityID         int16
 	spCountryID      int16
 	spContinentID    int16
+	authArg          []byte
 }
 
 func unpackAuthedEchoContext(c echo.Context) (context.Context, metaContext) {
@@ -246,7 +265,7 @@ func verifySig(ctx context.Context, challenge sigChallenge) (verifySigResult, er
 	sigMatch, err := cmn.LotusAPIHeavy.WalletVerify(
 		ctx,
 		workerAddr,
-		append([]byte{0x20, 0x20, 0x20}, be.Data...),
+		append(append([]byte{0x20, 0x20, 0x20}, be.Data...), challenge.arg...),
 		&filcrypto.Signature{
 			Type: filcrypto.SigTypeBLS, // worker keys are always BLS
 			Data: []byte(sig),

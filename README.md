@@ -46,10 +46,10 @@ the steps are as follows:
 the current operator of a particular SP system. Authentication is based on having
 access to your SP **Worker Key**, the same one you use to submit ProveCommits
 when onboarding new sectors. You can either use the reference authenticator script,
-or write your own [based on the simple steps described within](https://github.com/filecoin-project/evergreen-dealer/blob/6ebf5230c7ec/misc/fil-spid.bash#L19-L30).
+or write your own [based on the simple steps described within](https://github.com/ribasushi/bash-fil-spid-v0/blob/5f41eec1a/fil-spid.bash#L13-L33).
 It is also likely this functionality will be soon included in Filecoin implementations directly.
 
-  A. Download the authenticator: `curl -OL https://raw.githubusercontent.com/filecoin-project/evergreen-dealer/6ebf5230c7ec/misc/fil-spid.bash`
+  A. Download the authenticator: `curl -OL https://raw.githubusercontent.com/ribasushi/bash-fil-spid-v0/5f41eec1a/fil-spid.bash`
 
   B. Make it executable `chmod 755 fil-spid.bash`
 

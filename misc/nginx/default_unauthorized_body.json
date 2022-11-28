@@ -10,14 +10,14 @@
     " To perform such an authentication you must sign a challenge using your SP Worker key.                                   ",
     "                                                                                                                         ",
     " A reference authenticator is provided at the URL below, in the form of a standalone                                     ",
-    " bash script with its only dependencies being cat, grep, curl and jq                                                     ",
-    " https://github.com/filecoin-project/evergreen-dealer/blob/master/misc/fil-spid.bash                                     ",
+    " bash script with its only dependencies being cat, grep, head, curl, jq and base64                                       ",
+    " https://raw.githubusercontent.com/ribasushi/bash-fil-spid-v0/5f41eec1a/fil-spid.bash                                     ",
     "                                                                                                                         ",
     " You can also implement your own authenticator in a language of your choice: refer to                                    ",
     " the algorithm description at the top of the reference authenticator.                                                    ",
     "                                                                                                                         ",
     " Authenticator can be used like this:                                                                                    ",
-    "  curl -OL https://raw.githubusercontent.com/filecoin-project/evergreen-dealer/master/misc/fil-spid.bash ",
+    "  curl -OL https://raw.githubusercontent.com/ribasushi/bash-fil-spid-v0/5f41eec1a/fil-spid.bash ",
     "  chmod 755 fil-spid.bash ",
     "  echo curl -sLH \"Authorization: $( ./fil-spid.bash f0XXXX )\" https://<!--# echo var="host" -->/pending_proposals | sh "
   ]
