@@ -12,9 +12,10 @@ import (
 	"time"
 
 	cmn "github.com/filecoin-project/evergreen-dealer/common"
+	"github.com/filecoin-project/evergreen-dealer/webapi/types"
 	filaddr "github.com/filecoin-project/go-address"
 	filabi "github.com/filecoin-project/go-state-types/abi"
-	filprovider "github.com/filecoin-project/go-state-types/builtin/v8/miner"
+	filprovider "github.com/filecoin-project/go-state-types/builtin/v9/miner"
 	filcrypto "github.com/filecoin-project/go-state-types/crypto"
 	lotustypes "github.com/filecoin-project/lotus/chain/types"
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -136,6 +137,8 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		var requestUUID string
 		var stateEpoch int64
 		var spDetails []int16
+		var spInfo types.SPInfo
+		var spInfoLastPoll *time.Time
 		if err := cmn.Db.QueryRow(
 			ctx,
 			`
@@ -150,16 +153,25 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 							org_id,
 							city_id,
 							country_id,
-							continent_id,
-							sector_log2_size
+							continent_id
 						]
 					FROM egd.providers
+					WHERE provider_id = $1
+				),
+				(
+					SELECT info
+						FROM egd.providers_info
+					WHERE provider_id = $1
+				),
+				(
+					SELECT provider_last_polled
+						FROM egd.providers_info
 					WHERE provider_id = $1
 				)
 			`,
 			spID,
 			reqJ,
-		).Scan(&requestUUID, &stateEpoch, &spDetails); err != nil {
+		).Scan(&requestUUID, &stateEpoch, &spDetails, &spInfo, &spInfoLastPoll); err != nil {
 			return cmn.WrErr(err)
 		}
 
@@ -176,7 +188,8 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 			spCityID:         spDetails[1],
 			spCountryID:      spDetails[2],
 			spContinentID:    spDetails[3],
-			spSectorLog2Size: spDetails[4],
+			spInfo:           spInfo,
+			spInfoLastPolled: spInfoLastPoll,
 		})
 
 		return next(c)
@@ -186,7 +199,8 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 type metaContext struct {
 	authedActorID    cmn.ActorID
 	stateEpoch       int64
-	spSectorLog2Size int16
+	spInfo           types.SPInfo
+	spInfoLastPolled *time.Time
 	spOrgID          int16
 	spCityID         int16
 	spCountryID      int16

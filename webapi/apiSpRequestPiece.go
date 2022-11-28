@@ -12,7 +12,7 @@ import (
 	filabi "github.com/filecoin-project/go-state-types/abi"
 	filbig "github.com/filecoin-project/go-state-types/big"
 	filbuiltin "github.com/filecoin-project/go-state-types/builtin"
-	filmarket "github.com/filecoin-project/go-state-types/builtin/v8/market"
+	filmarket "github.com/filecoin-project/go-state-types/builtin/v9/market"
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/ipfs/go-cid"
 	"github.com/jackc/pgx/v4"
@@ -49,6 +49,29 @@ func apiSpRequestPiece(c echo.Context) error {
 			return retFail(c, types.ErrInvalidRequest, err.Error())
 		}
 		tenantID = int16(tid)
+	}
+
+	// check whether the provider has been polled
+	if ctxMeta.spInfoLastPolled == nil ||
+		ctxMeta.spInfoLastPolled.Before(time.Now().Add(-1*cmn.PolledSPInfoStaleAfterMinutes*time.Minute)) {
+		return retFail(
+			c,
+			types.ErrStorageProviderInfoTooOld,
+			"Provider has not been dialed by the polling system recently: please try again in about a minute",
+		)
+	}
+
+	// check whether dialable at all
+	if ctxMeta.spInfo.PeerInfo == nil || len(ctxMeta.spInfo.PeerInfo.Protos) == 0 {
+		return retFail(
+			c,
+			types.ErrStorageProviderUndialable,
+			strings.Join([]string{
+				"It appears your provider can not be libp2p-dialed over the TCP transport.",
+				"Please invoke the status endpoint for further details:",
+				curlAuthedForSP(c, ctxMeta.authedActorID, "/sp/status"),
+			}, "\n"),
+		)
 	}
 
 	errCode, err := spIneligibleErr(ctx, ctxMeta.authedActorID)
@@ -112,12 +135,12 @@ func apiSpRequestPiece(c echo.Context) error {
 			return retFail(c, types.ErrUnclaimedPieceCID, "Piece %s is not claimed by any selected tenant", pCid)
 		}
 
-		if tenantsEligible[0].PieceSizeBytes > 1<<ctxMeta.spSectorLog2Size {
+		if tenantsEligible[0].PieceSizeBytes > 1<<ctxMeta.spInfo.SectorLog2Size {
 			return retFail(c, types.ErrOversizedPiece,
 				"Piece %s weighing %d GiB is larger than the %d GiB sector size your SP supports",
 				pCid,
 				tenantsEligible[0].PieceSizeBytes>>30,
-				1<<(ctxMeta.spSectorLog2Size-30),
+				1<<(ctxMeta.spInfo.SectorLog2Size-30),
 			)
 		}
 
@@ -260,7 +283,7 @@ func apiSpRequestPiece(c echo.Context) error {
 
 				// Label is a *completely* arbitrary, client-chosen nonce to apply to the deal, can be a UTF8-string or []bytes
 				// For the time being it is the v0/b32v1 cid of the "root" in question, obviously subject to change
-				// Current max-size is https://github.com/filecoin-project/go-state-types/blob/v0.1.11/builtin/v8/market/policy.go#L27-L28
+				// Current max-size is https://github.com/filecoin-project/go-state-types/blob/v0.9.9/builtin/v9/market/policy.go#L29-L30
 				Label: encodedLabel,
 
 				// do not change under any circumstances: even when payments eventually happen, they will happen explicitly out of band

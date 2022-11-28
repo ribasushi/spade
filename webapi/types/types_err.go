@@ -11,6 +11,8 @@ func _() {
 	_ = x[ErrOversizedPiece-4011]
 	_ = x[ErrStorageProviderSuspended-4012]
 	_ = x[ErrStorageProviderIneligibleToMine-4013]
+	_ = x[ErrStorageProviderInfoTooOld-4041]
+	_ = x[ErrStorageProviderUndialable-4042]
 	_ = x[ErrUnclaimedPieceCID-4020]
 	_ = x[ErrProviderHasReplica-4021]
 	_ = x[ErrTenantsOutOfDatacap-4022]
@@ -27,15 +29,17 @@ const (
 	_APIErrorCode_name_0 = "ErrOversizedPieceErrStorageProviderSuspendedErrStorageProviderIneligibleToMine"
 	_APIErrorCode_name_1 = "ErrUnclaimedPieceCIDErrProviderHasReplicaErrTenantsOutOfDatacapErrTooManyReplicasErrProviderAboveMaxInFlight"
 	_APIErrorCode_name_2 = "ErrReplicationRulesViolationErrExternalReservationRefused"
-	_APIErrorCode_name_3 = "ErrInvalidRequestErrUnauthorizedAccess"
-	_APIErrorCode_name_4 = "ErrSystemTemporarilyDisabled"
+	_APIErrorCode_name_3 = "ErrStorageProviderInfoTooOldErrStorageProviderUndialable"
+	_APIErrorCode_name_4 = "ErrInvalidRequestErrUnauthorizedAccess"
+	_APIErrorCode_name_5 = "ErrSystemTemporarilyDisabled"
 )
 
 var (
 	_APIErrorCode_index_0 = [...]uint8{0, 17, 44, 78}
 	_APIErrorCode_index_1 = [...]uint8{0, 20, 41, 63, 81, 108}
 	_APIErrorCode_index_2 = [...]uint8{0, 28, 57}
-	_APIErrorCode_index_3 = [...]uint8{0, 17, 38}
+	_APIErrorCode_index_3 = [...]uint8{0, 28, 56}
+	_APIErrorCode_index_4 = [...]uint8{0, 17, 38}
 )
 
 func (i APIErrorCode) String() string {
@@ -49,11 +53,14 @@ func (i APIErrorCode) String() string {
 	case 4029 <= i && i <= 4030:
 		i -= 4029
 		return _APIErrorCode_name_2[_APIErrorCode_index_2[i]:_APIErrorCode_index_2[i+1]]
+	case 4041 <= i && i <= 4042:
+		i -= 4041
+		return _APIErrorCode_name_3[_APIErrorCode_index_3[i]:_APIErrorCode_index_3[i+1]]
 	case 4400 <= i && i <= 4401:
 		i -= 4400
-		return _APIErrorCode_name_3[_APIErrorCode_index_3[i]:_APIErrorCode_index_3[i+1]]
+		return _APIErrorCode_name_4[_APIErrorCode_index_4[i]:_APIErrorCode_index_4[i+1]]
 	case i == 4503:
-		return _APIErrorCode_name_4
+		return _APIErrorCode_name_5
 	default:
 		return "APIErrorCode(" + strconv.FormatInt(int64(i), 10) + ")"
 	}

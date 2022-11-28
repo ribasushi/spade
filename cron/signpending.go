@@ -6,7 +6,7 @@ import (
 	cmn "github.com/filecoin-project/evergreen-dealer/common"
 	filaddr "github.com/filecoin-project/go-address"
 	cborutil "github.com/filecoin-project/go-cbor-util"
-	filmarket "github.com/filecoin-project/go-state-types/builtin/v8/market"
+	filmarket "github.com/filecoin-project/go-state-types/builtin/v9/market"
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/urfave/cli/v2"
 )

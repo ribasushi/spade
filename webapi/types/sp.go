@@ -10,6 +10,9 @@ const (
 	ErrStorageProviderSuspended        APIErrorCode = 4012
 	ErrStorageProviderIneligibleToMine APIErrorCode = 4013
 
+	ErrStorageProviderInfoTooOld APIErrorCode = 4041
+	ErrStorageProviderUndialable APIErrorCode = 4042
+
 	ErrUnclaimedPieceCID         APIErrorCode = 4020
 	ErrProviderHasReplica        APIErrorCode = 4021
 	ErrTenantsOutOfDatacap       APIErrorCode = 4022
@@ -39,6 +42,18 @@ type ResponsePiecesEligible []*Piece
 func (ResponsePendingProposals) is() isResponsePayload { return isResponsePayload{} }
 func (ResponseDealRequest) is() isResponsePayload      { return isResponsePayload{} }
 func (ResponsePiecesEligible) is() isResponsePayload   { return isResponsePayload{} }
+
+type SPInfo struct {
+	Errors             []string            `json:"errors,omitempty"`
+	SectorLog2Size     uint8               `json:"sector_log2_size"`
+	PeerID             *string             `json:"peerid"`
+	MultiAddrs         []string            `json:"multiaddrs"`
+	RetrievalProtocols map[string][]string `json:"retrieval_protocols,omitempty"`
+	PeerInfo           *struct {
+		Protos map[string]struct{}    `json:"libp2p_protocols"`
+		Meta   map[string]interface{} `json:"meta"`
+	} `json:"peer_info,omitempty"`
+}
 
 type ProposalFailure struct { //nolint:revive
 	ErrorTimeStamp time.Time `json:"timestamp"`

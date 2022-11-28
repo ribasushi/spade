@@ -107,7 +107,7 @@ func main() {
 		Name:  cmn.AppName + "-cron",
 		Usage: "Misc background processes for " + cmn.AppName,
 		Commands: []*cli.Command{
-			// updateProviders,
+			pollProviders,
 			trackDeals,
 			pushMetrics,
 			signPending,

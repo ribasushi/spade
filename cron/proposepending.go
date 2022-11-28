@@ -2,17 +2,23 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	cmn "github.com/filecoin-project/evergreen-dealer/common"
+	"github.com/filecoin-project/evergreen-dealer/cron/filtypes"
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/google/uuid"
 	"github.com/ipfs/go-cid"
+	"github.com/multiformats/go-multiaddr"
 	"github.com/urfave/cli/v2"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/xerrors"
+
+	lp2phost "github.com/libp2p/go-libp2p/core/host"
+	lp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 
 	filaddr "github.com/filecoin-project/go-address"
 	filmarket "github.com/filecoin-project/go-state-types/builtin/v9/market"
@@ -22,46 +28,72 @@ import (
 	lotusapi "github.com/filecoin-project/lotus/api"
 )
 
-type deliveryMethod int
-
-const (
-	lotusClient = deliveryMethod(iota)
-)
-
-type proposalTotals struct {
-	uniqueProviders int
-	delivered       *int32
-	timeout         *int32
-	failed          *int32
-}
 type proposalPending struct {
-	ProposalUUID      uuid.UUID
-	ProposalLabel     string
-	ProposalPayload   filmarket.DealProposal
-	ProposalSignature filcrypto.Signature
-	ProposalCid       string
+	ProposalUUID         uuid.UUID
+	ProposalLabel        string
+	ProposalPayload      filmarket.DealProposal
+	ProposalSignature    filcrypto.Signature
+	ProposalCid          string
+	PeerID               *lp2ppeer.ID
+	Multiaddrs           []string
+	ProviderSupportsV120 bool
 }
 type proposalsPerSP map[filaddr.Address][]proposalPending
 
+type runTotals struct {
+	proposals       int
+	uniqueProviders int
+	deliveredLegacy *int32
+	delivered120    *int32
+	timedout        *int32
+	failed          *int32
+}
+
+var (
+	spProposalSleep int
+	proposalTimeout int
+	perSpTimeout    int
+)
 var proposePending = &cli.Command{
 	Usage: "Propose pending deals to providers",
 	Name:  "propose-pending",
-	Flags: []cli.Flag{},
+	Flags: []cli.Flag{
+		&cli.IntFlag{
+			Name:        "sleep-between-proposals",
+			Usage:       "Amount of seconds to wait between proposals to same SP",
+			Value:       3,
+			Destination: &spProposalSleep,
+		},
+		&cli.IntFlag{
+			Name:        "proposal-timeout",
+			Usage:       "Amount of seconds before aborting a specific proposal",
+			Value:       30,
+			Destination: &proposalTimeout,
+		},
+		&cli.IntFlag{
+			Name:        "per-sp-timeout",
+			Usage:       "Amount of seconds proposals for specific SP could take in total",
+			Value:       270, // 4.5 mins
+			Destination: &perSpTimeout,
+		},
+	},
 	Action: func(cctx *cli.Context) error {
-
 		ctx := cctx.Context
 
-		totals := proposalTotals{
-			delivered: new(int32),
-			timeout:   new(int32),
-			failed:    new(int32),
+		tot := runTotals{
+			deliveredLegacy: new(int32),
+			delivered120:    new(int32),
+			timedout:        new(int32),
+			failed:          new(int32),
 		}
 		defer func() {
 			log.Infow("summary",
-				"uniqueProviders", totals.uniqueProviders,
-				"successful", atomic.LoadInt32(totals.delivered),
-				"failed", atomic.LoadInt32(totals.failed),
-				"timeout", atomic.LoadInt32(totals.timeout),
+				"uniqueProviders", tot.uniqueProviders,
+				"proposals", tot.proposals,
+				"successfulV120", atomic.LoadInt32(tot.delivered120),
+				"successfulLegacy", atomic.LoadInt32(tot.deliveredLegacy),
+				"failed", atomic.LoadInt32(tot.failed),
+				"timedout", atomic.LoadInt32(tot.timedout),
 			)
 		}()
 
@@ -76,10 +108,13 @@ var proposePending = &cli.Command{
 					pr.proposal_meta->'filmarket_proposal' AS proposal_payload,
 					pr.proposal_meta->'signature' AS proposal_signature,
 					pr.proposal_meta->>'signed_proposal_cid' AS proposal_cid,
-					p.proposal_label
+					p.proposal_label,
+					( pi.info->'peer_info'->'libp2p_protocols'->$1 ) IS NOT NULL AS provider_supports_v120,
+					pi.info->'peerid' AS peer_id,
+					pi.info->'multiaddrs' AS multiaddrs
 				FROM egd.proposals pr
-				JOIN egd.providers prov USING ( provider_id )
 				JOIN egd.pieces p USING ( piece_id )
+				LEFT JOIN egd.providers_info pi USING ( provider_id )
 			WHERE
 				proposal_delivered IS NULL
 					AND
@@ -88,142 +123,296 @@ var proposePending = &cli.Command{
 				proposal_failstamp = 0
 			ORDER BY entry_created
 			`,
+			filtypes.StorageProposalV120,
 		); err != nil {
 			return cmn.WrErr(err)
 		}
 
-		props := make(map[deliveryMethod]proposalsPerSP, 4)
-		props[lotusClient] = make(proposalsPerSP, 16) // for now only lotusClient is supported
+		props := make(proposalsPerSP, 4)
 		for _, p := range pending {
-			sp := p.ProposalPayload.Provider
-			if _, exists := props[lotusClient][sp]; !exists {
-				props[lotusClient][sp] = make([]proposalPending, 0, 128)
-			}
-			props[lotusClient][sp] = append(props[lotusClient][sp], p)
-		}
 
-		eg := new(errgroup.Group)
-		if len(props[lotusClient]) > 0 {
-			eg.Go(func() error { return proposeViaLotusDaemon(ctx, props[lotusClient], totals) })
+			if p.PeerID == nil || len(p.Multiaddrs) == 0 {
+				if _, err := cmn.Db.Exec(
+					context.Background(), // deliberate: even if outer context is cancelled we still need to write to DB
+					`
+					UPDATE egd.proposals SET
+						proposal_failstamp = egd.big_now(),
+						proposal_meta = JSONB_SET( proposal_meta, '{ failure }', TO_JSONB( 'provider not dialable: insufficient information published on chain'::TEXT ) )
+					WHERE
+						proposal_uuid = $1
+					`,
+					p.ProposalUUID,
+				); err != nil {
+					return cmn.WrErr(err)
+				}
+				continue
+			}
+
+			props[p.ProposalPayload.Provider] = append(props[p.ProposalPayload.Provider], p)
+			tot.proposals++
+		}
+		tot.uniqueProviders = len(props)
+
+		eg, ctx := errgroup.WithContext(ctx)
+		for sp := range props {
+			sp := sp
+			eg.Go(func() error { return proposeToSp(ctx, props[sp], tot) })
 		}
 		return eg.Wait()
 	},
 }
 
-func proposeViaLotusDaemon(ctx context.Context, psp proposalsPerSP, totals proposalTotals) error {
+func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) error {
 
-	var wg sync.WaitGroup
-	for spID, spProps := range psp {
-
-		jobDesc := fmt.Sprintf("proposing %d deals to %s", len(spProps), spID)
-		spProps := spProps
-
-		wg.Add(1)
-		log.Info("START " + jobDesc)
-		go func() {
-
-			var countProposed, countFailed int
-			t0 := time.Now()
-
-			defer func() {
-				log.Infof("END %s, %d succeeded, %d failed, took %s", jobDesc, countProposed, countFailed, time.Since(t0).String())
-				wg.Done()
-			}()
-
-			for i, p := range spProps {
-
-				if i != 0 {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(5 * time.Second):
-					}
-				}
-
-				// some SPs take *FOREVER* to respond ( 40+ seconds )
-				// Cut them off early, so that the rest of the queue isn't held up
-				if time.Since(t0) > 4*time.Minute {
-					log.Warnf("Process of %s is taking too long, aborting", jobDesc)
-					return
-				}
-
-				var propCid *cid.Cid
-				var apiErr error
-				{
-					tCtx, tCtxCancel := context.WithTimeout(ctx, 90*time.Second)
-					propCid, apiErr = cmn.LotusAPIHeavy.ClientStatelessDeal(
-						tCtx,
-						&lotusapi.StartDealParams{
-							DealStartEpoch:     p.ProposalPayload.StartEpoch,
-							MinBlocksDuration:  uint64(p.ProposalPayload.EndEpoch - p.ProposalPayload.StartEpoch),
-							FastRetrieval:      true,
-							VerifiedDeal:       p.ProposalPayload.VerifiedDeal,
-							Wallet:             p.ProposalPayload.Client,
-							Miner:              p.ProposalPayload.Provider,
-							EpochPrice:         p.ProposalPayload.StoragePricePerEpoch,
-							ProviderCollateral: p.ProposalPayload.ProviderCollateral,
-							Data: &lotusmarket.DataRef{
-								TransferType: lotusmarket.TTManual,
-								PieceCid:     &p.ProposalPayload.PieceCID,
-								PieceSize:    p.ProposalPayload.PieceSize.Unpadded(),
-								Root:         cid.MustParse(p.ProposalLabel),
-							},
-						},
-					)
-					tCtxCancel()
-				}
-
-				var dbErr error
-				if apiErr != nil {
-					countFailed++
-					atomic.AddInt32(totals.failed, 1)
-					log.Warnf("While %s, encountered failure: %s", jobDesc, apiErr.Error())
-					_, dbErr = cmn.Db.Exec(
-						ctx,
-						`
-						UPDATE egd.proposals SET
-							proposal_failstamp = egd.big_now(),
-							proposal_meta = JSONB_SET( proposal_meta, '{ failure }', TO_JSONB( $1::TEXT ) )
-						WHERE
-							proposal_uuid = $2
-						`,
-						apiErr.Error(),
-						p.ProposalUUID,
-					)
-				} else {
-					if p.ProposalCid != propCid.String() {
-						// this is a soft-warning, not catastrophic (see below)
-						log.Warnf("proposal CID mismatch on success: expected %s got %s", p.ProposalCid, propCid.String())
-					}
-
-					countProposed++
-					atomic.AddInt32(totals.delivered, 1)
-					_, dbErr = cmn.Db.Exec(
-						ctx,
-						`
-						UPDATE egd.proposals SET
-							proposal_delivered = NOW(),
-							-- we need to re-write the signed_proposal_cid, as Lotus is known to mangle things for us at times
-							proposal_meta = JSONB_SET(
-								proposal_meta,
-								'{ signed_proposal_cid }',
-								TO_JSONB( $2::TEXT )
-							)
-						WHERE
-							proposal_uuid = $1
-						`,
-						p.ProposalUUID,
-						propCid.String(),
-					)
-				}
-				if dbErr != nil {
-					log.Errorw("unexpected error updating proposal", "proposal", p, "error", dbErr.Error())
-				}
-			}
-		}()
+	sp := props[0].ProposalPayload.Provider
+	propType := "legacy"
+	if props[0].ProviderSupportsV120 {
+		propType = "v120"
 	}
 
-	wg.Wait()
+	dealCount := len(props)
+	jobDesc := fmt.Sprintf("proposing %d deals to %s(%s)", dealCount, sp, propType)
+	var delivered, failed, timedout int
+	log.Info("START " + jobDesc)
+	t0 := time.Now()
+	defer func() {
+		log.Infof(
+			"END %s, out of %d proposals: %d succeeded, %d failed, %d timed out, took %s",
+			jobDesc,
+			dealCount,
+			delivered, failed, timedout,
+			time.Since(t0).String(),
+		)
+	}()
+
+	// some SPs take *FOREVER* to respond ( 40+ seconds )
+	// Cap processing, so that the rest of the queue isn't held up
+	// ( they will restart from where they left off on next round )
+	ctx, cancel := context.WithDeadline(ctx, t0.Add(time.Duration(perSpTimeout)*time.Second))
+	defer cancel()
+
+	var nodeHost lp2phost.Host
+	var dialTookMsecs *int64
+	var localPeerid *string
+	for i, p := range props {
+
+		// wait a bit between deliveries
+		if i != 0 {
+			select {
+			case <-ctx.Done():
+				return nil // timeout is not an error
+			case <-time.After(time.Duration(spProposalSleep) * time.Second):
+			}
+		}
+
+		var propCidStr *string
+		var callErr error
+		var proposingTookMsecs *int64
+
+		if !p.ProviderSupportsV120 {
+
+			var propCid *cid.Cid
+			tCtx, tCtxCancel := context.WithTimeout(ctx, time.Duration(proposalTimeout)*time.Second)
+			t1 := time.Now()
+			propCid, callErr = cmn.LotusAPIHeavy.ClientStatelessDeal(
+				tCtx,
+				&lotusapi.StartDealParams{
+					DealStartEpoch:     p.ProposalPayload.StartEpoch,
+					MinBlocksDuration:  uint64(p.ProposalPayload.EndEpoch - p.ProposalPayload.StartEpoch),
+					FastRetrieval:      true,
+					VerifiedDeal:       p.ProposalPayload.VerifiedDeal,
+					Wallet:             p.ProposalPayload.Client,
+					Miner:              p.ProposalPayload.Provider,
+					EpochPrice:         p.ProposalPayload.StoragePricePerEpoch,
+					ProviderCollateral: p.ProposalPayload.ProviderCollateral,
+					Data: &lotusmarket.DataRef{
+						TransferType: lotusmarket.TTManual,
+						PieceCid:     &p.ProposalPayload.PieceCID,
+						PieceSize:    p.ProposalPayload.PieceSize.Unpadded(),
+						Root:         cid.MustParse(p.ProposalLabel),
+					},
+				},
+			)
+			pms := time.Since(t1).Milliseconds()
+			proposingTookMsecs = &pms
+			tCtxCancel()
+			if propCid != nil {
+				s := propCid.String()
+				propCidStr = &s
+			}
+		} else {
+
+			// connect on first iteration
+			if nodeHost == nil {
+
+				var err error
+				nodeHost, _, err = newLp2pNode(time.Duration(proposalTimeout) * time.Second)
+				if err != nil {
+					return cmn.WrErr(err)
+				}
+
+				defer func() {
+					if err := nodeHost.Close(); err != nil {
+						log.Warnf("unexpected error shutting down node %s: %s", nodeHost.ID().String(), err)
+					}
+				}()
+
+				lpid := nodeHost.ID().String()
+				localPeerid = &lpid
+
+				pTag := "proposing"
+				nodeHost.ConnManager().Protect(*p.PeerID, pTag)
+				defer nodeHost.ConnManager().Unprotect(*p.PeerID, pTag)
+
+				addrs := make([]multiaddr.Multiaddr, len(p.Multiaddrs))
+				for i := range p.Multiaddrs {
+					addrs[i] = multiaddr.StringCast(p.Multiaddrs[i])
+				}
+				t1 := time.Now()
+				callErr = nodeHost.Connect(ctx, lp2ppeer.AddrInfo{
+					ID:    *p.PeerID,
+					Addrs: addrs,
+				})
+				dms := time.Since(t1).Milliseconds()
+				dialTookMsecs = &dms
+			}
+
+			if callErr == nil {
+				var resp filtypes.StorageProposalV120Response
+				tCtx, tCtxCancel := context.WithTimeout(ctx, time.Duration(proposalTimeout)*time.Second)
+				t1 := time.Now()
+				callErr = lp2pRPC(
+					tCtx,
+					nodeHost,
+					*p.PeerID,
+					filtypes.StorageProposalV120,
+					&filtypes.StorageProposalV120Params{
+						DealUUID:     p.ProposalUUID,
+						IsOffline:    true,
+						DealDataRoot: p.ProposalPayload.PieceCID,
+						ClientDealProposal: filmarket.ClientDealProposal{
+							Proposal:        p.ProposalPayload,
+							ClientSignature: p.ProposalSignature,
+						},
+					},
+					&resp,
+				)
+				pms := time.Since(t1).Milliseconds()
+				proposingTookMsecs = &pms
+				tCtxCancel()
+				if callErr == nil && !resp.Accepted {
+					callErr = xerrors.New(resp.Message)
+				}
+			}
+		}
+
+		// we did it!
+		if callErr == nil {
+
+			delivered++
+			if p.ProviderSupportsV120 {
+				atomic.AddInt32(tot.delivered120, 1)
+			} else {
+				atomic.AddInt32(tot.deliveredLegacy, 1)
+			}
+
+			if propCidStr != nil && p.ProposalCid != *propCidStr {
+				// this is a soft-warning, not catastrophic (see below)
+				log.Warnf("proposal CID mismatch on success: expected %s got %s", p.ProposalCid, *propCidStr)
+			}
+
+			if _, err := cmn.Db.Exec(
+				context.Background(), // deliberate: even if outer context is cancelled we still need to write to DB
+				`
+				UPDATE egd.proposals SET
+					proposal_delivered = NOW(),
+					proposal_meta = JSONB_STRIP_NULLS(
+						JSONB_SET(
+							JSONB_SET(
+								JSONB_SET(
+									-- FIXME - remove when v120 is default
+									-- we need to re-write the signed_proposal_cid, as Lotus is known to mangle things for us at times
+									JSONB_SET(
+										proposal_meta,
+										'{ signed_proposal_cid }',
+										TO_JSONB( COALESCE( $2::TEXT, proposal_meta->>'signed_proposal_cid' ) )
+									),
+									'{ dialing_peerid }',
+									COALESCE( TO_JSONB( $3::TEXT ), 'null'::JSONB )
+								),
+								'{ dial_took_msecs }',
+								COALESCE( TO_JSONB( $4::BIGINT ), 'null'::JSONB )
+							),
+							'{ proposal_took_msecs }',
+							COALESCE( TO_JSONB( $5::BIGINT ), 'null'::JSONB )
+						)
+					)
+				WHERE
+					proposal_uuid = $1
+				`,
+				p.ProposalUUID,
+				propCidStr,
+				localPeerid,
+				dialTookMsecs,
+				proposingTookMsecs,
+			); err != nil {
+				return cmn.WrErr(err)
+			}
+		} else {
+			log.Error(callErr)
+
+			didTimeout := errors.Is(callErr, context.DeadlineExceeded)
+			if didTimeout {
+				timedout++
+				atomic.AddInt32(tot.timedout, 1)
+			} else {
+				failed++
+				atomic.AddInt32(tot.failed, 1)
+			}
+
+			if _, err := cmn.Db.Exec(
+				context.Background(), // deliberate: even if outer context is cancelled we still need to write to DB
+				`
+				UPDATE egd.proposals SET
+					proposal_failstamp = egd.big_now(),
+					proposal_meta = JSONB_STRIP_NULLS(
+						JSONB_SET(
+							JSONB_SET(
+								JSONB_SET(
+									JSONB_SET(
+										proposal_meta,
+										'{ failure }',
+										TO_JSONB( $2::TEXT )
+									),
+									'{ dialing_peerid }',
+									COALESCE( TO_JSONB( $3::TEXT ), 'null'::JSONB )
+								),
+								'{ dial_took_msecs }',
+								COALESCE( TO_JSONB( $4::BIGINT ), 'null'::JSONB )
+							),
+							'{ proposal_took_msecs }',
+							COALESCE( TO_JSONB( $5::BIGINT ), 'null'::JSONB )
+						)
+					)
+				WHERE
+					proposal_uuid = $1
+				`,
+				p.ProposalUUID,
+				callErr.Error(),
+				localPeerid,
+				dialTookMsecs,
+				proposingTookMsecs,
+			); err != nil {
+				return cmn.WrErr(err)
+			}
+
+			// in case of a timeout or connection failure: bail after failing just one proposal, retry next time
+			if (p.ProviderSupportsV120 && nodeHost == nil) ||
+				didTimeout {
+				return nil
+			}
+		}
+	}
 
 	return nil
 }

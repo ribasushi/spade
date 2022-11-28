@@ -12,7 +12,8 @@ const (
 	ListEligibleDefaultSize = 500
 	ListEligibleMaxSize     = 2 << 20
 
-	ShowRecentFailuresHours = 24
+	ShowRecentFailuresHours       = 24
+	PolledSPInfoStaleAfterMinutes = 15
 
 	RequestPieceLockStatement = `SELECT PG_ADVISORY_XACT_LOCK( 1234567890111 )`
 )

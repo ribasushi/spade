@@ -1,5 +1,5 @@
--- Currently there is no schema versioning/manage,ent
--- This entire script is intended to run against an emoty DB as an initialization step
+-- Currently there is no schema versioning/management
+-- This entire script is intended to run against an empty DB as an initialization step
 -- It is *SAFE* to run it against a live database with existing data
 --
 --   psql service=XYZ < misc/pg_schema.sql
@@ -181,15 +181,57 @@ CREATE TABLE IF NOT EXISTS egd.providers (
   city_id SMALLINT NOT NULL DEFAULT 0,
   country_id SMALLINT NOT NULL DEFAULT 0,
   continent_id  SMALLINT NOT NULL DEFAULT 0,
-  sector_log2_size SMALLINT NOT NULL DEFAULT 0,
-  can_seal_64g_sectors BOOL NOT NULL GENERATED ALWAYS AS ( sector_log2_size >= 36 ) STORED,
   provider_meta JSONB NOT NULL DEFAULT '{}',
-  CONSTRAINT consistent_metadata CHECK (
-    ( org_id = 0 AND city_id = 0 AND country_id = 0 AND continent_id = 0 AND sector_log2_size = 0 )
+  CONSTRAINT consistent_location CHECK (
+    ( org_id = 0 AND city_id = 0 AND country_id = 0 AND continent_id = 0 )
       OR
-    ( org_id > 0 AND city_id > 0 AND country_id > 0 AND continent_id > 0 AND sector_log2_size > 0 )
+    ( org_id > 0 AND city_id > 0 AND country_id > 0 AND continent_id > 0 )
   )
 );
+
+CREATE TABLE IF NOT EXISTS egd.providers_info (
+  provider_id INTEGER UNIQUE NOT NULL REFERENCES egd.providers ( provider_id ),
+  provider_last_polled TIMESTAMP WITH TIME ZONE NOT NULL,
+  info_last_updated TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  info_dialing_took_msecs INTEGER,
+  info_dialing_peerid TEXT,
+  info JSONB NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS egd.providers_info_log (
+  provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
+  info_entry_created TIMESTAMP WITH TIME ZONE NOT NULL,
+  info_dialing_took_msecs INTEGER,
+  info_dialing_peerid TEXT,
+  info JSONB NOT NULL DEFAULT '{}'
+);
+CREATE OR REPLACE
+  FUNCTION egd.record_provider_info_change() RETURNS TRIGGER
+    LANGUAGE plpgsql
+AS $$
+BEGIN
+  INSERT INTO egd.providers_info_log (
+    provider_id, info_entry_created, info_dialing_took_msecs, info_dialing_peerid, info
+  ) VALUES(
+    NEW.provider_id, NEW.provider_last_polled, NEW.info_dialing_took_msecs, NEW.info_dialing_peerid, NEW.info
+  );
+  UPDATE egd.providers_info SET
+    info_last_updated = NEW.provider_last_polled
+  WHERE provider_id = NEW.provider_id;
+  RETURN NULL;
+END;
+$$;
+CREATE OR REPLACE TRIGGER trigger_new_provider_info
+  AFTER INSERT ON egd.providers_info
+  FOR EACH ROW
+  EXECUTE PROCEDURE egd.record_provider_info_change()
+;
+CREATE OR REPLACE TRIGGER trigger_update_provider_info
+  AFTER UPDATE ON egd.providers_info
+  FOR EACH ROW
+  WHEN ( OLD.info != NEW.info )
+  EXECUTE PROCEDURE egd.record_provider_info_change()
+;
+
 
 CREATE TABLE IF NOT EXISTS egd.tenants_providers (
   provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
@@ -206,6 +248,7 @@ CREATE TABLE IF NOT EXISTS egd.requests (
   request_dump JSONB NOT NULL,
   request_meta JSONB NOT NULL DEFAULT '{}'
 );
+CREATE INDEX IF NOT EXISTS requests_entry_created ON egd.requests ( entry_created);
 CREATE OR REPLACE
   FUNCTION egd.init_authed_sp() RETURNS TRIGGER
     LANGUAGE plpgsql
@@ -323,7 +366,7 @@ CREATE OR REPLACE TRIGGER trigger_proposal_update_ts
 CREATE INDEX IF NOT EXISTS proposals_piece_idx ON egd.proposals ( piece_id );
 CREATE INDEX IF NOT EXISTS proposals_pending ON egd.proposals ( piece_id, provider_id, client_id ) INCLUDE ( proxied_log2_size ) WHERE ( proposal_failstamp = 0 AND activated_deal_id IS NULL );
 
--- Used exclusively for the `FilecoinDAG` portion of a response and corresponding availability matview
+-- Used exclusively for the `FilDAG` portion of a `Sources` response and corresponding availability matview
 CREATE OR REPLACE VIEW egd.known_fildag_deals_ranked AS (
   SELECT
       piece_id,
@@ -1550,8 +1593,9 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS \$\$
           sp.city_id,
           sp.country_id,
           sp.continent_id,
-          sp.can_seal_64g_sectors
+          ( COALESCE( (spi.info->\x{27}sector_log2_size\x{27})::BIGINT, 0 ) >= 36 ) AS can_seal_64g_sectors
         FROM egd.providers sp
+        LEFT JOIN egd.providers_info spi USING ( provider_id )
       WHERE
         sp.provider_id = arg_calling_provider_id
     ),
@@ -1681,8 +1725,9 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           sp.city_id,
           sp.country_id,
           sp.continent_id,
-          sp.can_seal_64g_sectors
+          ( COALESCE( (spi.info->'sector_log2_size')::BIGINT, 0 ) >= 36 ) AS can_seal_64g_sectors
         FROM egd.providers sp
+        LEFT JOIN egd.providers_info spi USING ( provider_id )
       WHERE
         sp.provider_id = arg_calling_provider_id
     ),
@@ -1888,8 +1933,9 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           sp.city_id,
           sp.country_id,
           sp.continent_id,
-          sp.can_seal_64g_sectors
+          ( COALESCE( (spi.info->'sector_log2_size')::BIGINT, 0 ) >= 36 ) AS can_seal_64g_sectors
         FROM egd.providers sp
+        LEFT JOIN egd.providers_info spi USING ( provider_id )
       WHERE
         sp.provider_id = arg_calling_provider_id
     ),
