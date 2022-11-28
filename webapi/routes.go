@@ -2,10 +2,8 @@ package main
 
 import "github.com/labstack/echo/v4"
 
-//
 // This lists in one place all recognized routes & parameters
 // FIXME - we should make an openapi or something for this...
-//
 func registerRoutes(e *echo.Echo) {
 	spRoutes := e.Group("/sp", spidAuth)
 
@@ -34,7 +32,7 @@ func registerRoutes(e *echo.Echo) {
 	//   When true the result includes eligible pieces without any known sources. Such pieces are omitted by default.
 	//
 	// - orglocal-only = <boolean>
-	//   When true restrict result only to pieces with active filecoin sources within your own Org.
+	//   When true restrict result only to pieces with active fil-network deals within your own Org.
 	//
 	spRoutes.GET("/eligible_pieces", apiSpListEligible)
 

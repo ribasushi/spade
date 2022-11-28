@@ -22,7 +22,7 @@ import (
 )
 
 var trackDeals = &cli.Command{
-	Usage: "Track state of filecoin deals related to known PieceCIDs",
+	Usage: "Track state of fil deals related to known PieceCIDs",
 	Name:  "track-deals",
 	Flags: []cli.Flag{},
 	Action: func(cctx *cli.Context) error {

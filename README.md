@@ -2,7 +2,7 @@ filecoin-evergreen-dealer
 ==================
 
 This repository contains the software powering the EverGreen Dealer (EGD):
-A Filecoin Storage-Proposal Management Service.
+A Fil-Network Storage-Proposal Management Service.
 
 EGD provides a low-friction environment for Storage Providers (SP) to receive a
 virtually unlimited volume of FilecoinPlus (Fil+) denominated storage deals.
@@ -33,7 +33,7 @@ the service is nowhere near as smooth as it could and should be 😞 The final
 streamlined version of self-signups for both tenants and SPs as we envision it
 is still being worked on 👷 and we sincerely apologize for all the dust. Tentative
 ETA for completion of all work is the end of 2022. Please visit us in
-[#slingshot-evergreen over at the Filecoin Slack] with any further questions.
+[#spade over at the Fil Slack] with any further questions.
 
 ## Workflow
 
@@ -47,17 +47,16 @@ the current operator of a particular SP system. Authentication is based on havin
 access to your SP **Worker Key**, the same one you use to submit ProveCommits
 when onboarding new sectors. You can either use the reference authenticator script,
 or write your own [based on the simple steps described within](https://github.com/ribasushi/bash-fil-spid-v0/blob/5f41eec1a/fil-spid.bash#L13-L33).
-It is also likely this functionality will be soon included in Filecoin implementations directly.
+It is also likely this functionality will be soon included in Fil implementations directly.
 
   A. Download the authenticator: `curl -OL https://raw.githubusercontent.com/ribasushi/bash-fil-spid-v0/5f41eec1a/fil-spid.bash`
 
   B. Make it executable `chmod 755 fil-spid.bash`
 
-  C. Use it as part of your requests, e.g: `curl -sLH "Authorization: $( ./fil-spid.bash f0XXXX )" https://api.evergreen.filecoin.io/sp/pending_proposals`
+  C. Use it as part of your requests, e.g: `curl -sLH "Authorization: $( ./fil-spid.bash f0XXXX )" https://api.spade.storage/sp/pending_proposals`
 
 
-* Register with one or more of the currently available tenants. Any authenticated SP can examine the current list of tenants, the nature of their content, and their various sign-up and service conditions, by simply calling
-https://api.evergreen.filecoin.io/sp/status.
+* Register with one or more of the currently available tenants. Any authenticated SP can examine the current list of tenants, the nature of their content, and their various sign-up and service conditions, by simply calling https://api.spade.storage/sp/status
 
 ### SP Dealmaking
 
@@ -66,12 +65,12 @@ Note that you are not confined to using `curl`, which is simply used for simplic
 
   1. Use `/sp/eligible_pieces` to examine the lists of `PieceCID`s and potential data-sources which your SP is eligible to seal. Note that you can skip this step if you are working with a tenant directly: just move to 2) if you already have a list of `PieceCID`s.
 
-     `curl -sLH "Authorization: $( ./fil-spid.bash f0xxxx )" https://api.evergreen.filecoin.io/sp/eligible_pieces | less`
+     `curl -sLH "Authorization: $( ./fil-spid.bash f0xxxx )" https://api.spade.storage/sp/eligible_pieces | less`
 
 
   2. Use `/sp/request_piece/baga...` to request a deal proposal for every `PieceCID` whose data you can reasonably obtain. It is perfectly ok to request a deal, as a type of reservation, even if you are unsure whether you will be able to get the corresponding data. You will be given a tenant-controlled amount of days, and a proposal-bytes-in-flight allotment providing sufficient amount of time to obtain the necessary deal data. If you fail to do so: the proposal simply expires without consequences once it reaches its DealStartEpoch.
 
-     `curl -sLH "Authorization: $( ./fil-spid.bash f0xxxx )" https://api.evergreen.filecoin.io/sp/request_piece/bagaChosenPieceCidxxxxxxxxxxxxxxx`
+     `curl -sLH "Authorization: $( ./fil-spid.bash f0xxxx )" https://api.spade.storage/sp/request_piece/bagaChosenPieceCidxxxxxxxxxxxxxxx`
 
      About ~5 minutes after invoking this method your SP system should receive a deal proposal for the requested `PieceCID`. Its deal-start-time and other parameters are determined by the corresponding tenant providing the `PieceCID`.
 
@@ -79,13 +78,12 @@ Note that you are not confined to using `curl`, which is simply used for simplic
 
   3. Inject the data into your SP when you are ready to seal 🦭 ‼️ You can use `/sp/pending_proposals` at any time to view the outstanding deals against your SP.
 
-     `curl -sLH "Authorization: $( ./fil-spid.bash f0xxxx )" https://api.evergreen.filecoin.io/sp/pending_proposals`
+     `curl -sLH "Authorization: $( ./fil-spid.bash f0xxxx )" https://api.spade.storage/sp/pending_proposals`
 
 
   * Repeat steps 1, 2 and 3 over and over again for each individual `PieceCID`. You are strongly encouraged to automate this process: a typical SP would go through hundreds 💯 such interactions every day.
 
-In case of any difficulties or issues, don't hesitate to contact us in [#slingshot-evergreen over at the Filecoin Slack]: we are happy to hear from you 🤩
+In case of any difficulties or issues, don't hesitate to contact us in [#spade over at the Fil Slack]: we are happy to hear from you 🤩
 
 [API]: https://raw.githubusercontent.com/filecoin-project/evergreen-dealer/master/webapi/routes.go
-[#slingshot-evergreen over at the Filecoin Slack]: https://filecoinproject.slack.com/archives/C0377FJCG1L
-
+[#spade over at the Fil Slack]: https://filecoinproject.slack.com/archives/C0377FJCG1L

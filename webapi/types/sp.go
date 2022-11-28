@@ -113,12 +113,12 @@ type DataSource interface { //nolint:revive
 	SrcType() string
 }
 
-// FilSourceDAG represents an item retrievable from Filecoin using a block-transport protocol like Graphsync.
-// Whenever possible users of the deal engine should default to alternative sources offering stream-protocols.
+// FilSourceDAG represents an item retrievable from the Fil Network using a block-transport protocol like Graphsync.
+// Whenever possible users of the SPADE API should default to alternative sources offering stream-protocols.
 type FilSourceDAG struct {
 	SourceType string `json:"source_type"`
 
-	// filecoin specific
+	// fil specific
 	DealID             int64      `json:"deal_id"`
 	ProviderID         string     `json:"provider_id"`
 	OriginalPayloadCid string     `json:"original_payload_cid"`
@@ -137,10 +137,10 @@ func (s *FilSourceDAG) InitDerivedVals(pieceCid string) error { //nolint:revive
 		return fmt.Errorf("supplied PieceCID string can not be empty")
 	}
 	if s.ProviderID == "" || s.OriginalPayloadCid == "" {
-		return fmt.Errorf("filecoin DAG-source object missing mandatory values: %#v", s)
+		return fmt.Errorf("Fil DAG-source object missing mandatory values: %#v", s)
 	}
 
-	s.SourceType = "FilecoinDAG"
+	s.SourceType = "FilDAG"
 	s.SampleRetrieveCmd = fmt.Sprintf(
 		"lotus client retrieve --provider %s --maxPrice 0 --allow-local --car '%s' $(pwd)/%s.car",
 		s.ProviderID,

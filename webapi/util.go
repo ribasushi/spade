@@ -165,7 +165,7 @@ var providerEligibleCache, _ = ristretto.NewCache(&ristretto.Config{
 func ineligibleSpMsg(spID cmn.ActorID) string {
 	return fmt.Sprintf(
 		`
-At the time of this request Storage provider %s is not eligible to use this deal engine
+At the time of this request Storage provider %s is not eligible to use this API
 ( this state is is almost certainly *temporary* )
 
 Make sure that you:
@@ -174,8 +174,8 @@ Make sure that you:
 - Have sufficient quality-adjusted power to participate in block rewards
 - Have not faulted in the past 48h
 
-If the problem persists, or you believe this is a spurious error: please contact the engine
-administrators in #slingshot-evergreen over at the Filecoin Slack https://filecoin.io/slack
+If the problem persists, or you believe this is a spurious error: please contact the API
+administrators in #spade over at the Fil Slack https://filecoin.io/slack
 ( direct link: https://filecoinproject.slack.com/archives/C0377FJCG1L )
 `,
 		spID,
