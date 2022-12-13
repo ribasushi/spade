@@ -960,21 +960,24 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_deals_prefiltered_for_repcount AS
         kdr.intra_sp_rank = 1 -- this is safe, since the rank is based on the above 2 conditions
     )
 
-  SELECT
-      piece_id,
-      provider_id,
-      is_filplus,
-      UNNEST( claimant_ids ) AS claimant_id
-    FROM filtered
+  (
+    SELECT
+        piece_id,
+        provider_id,
+        is_filplus,
+        UNNEST( claimant_ids ) AS claimant_id
+      FROM filtered
 
-UNION ALL
+  UNION ALL
 
-  SELECT
-      piece_id,
-      provider_id,
-      is_filplus,
-      0 AS claimant_id
-    FROM filtered
+    SELECT
+        piece_id,
+        provider_id,
+        is_filplus,
+        0 AS claimant_id
+      FROM filtered
+  )
+  ORDER BY provider_id, claimant_id, piece_id, is_filplus
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_deals_prefiltered_for_repcount_key ON egd.mv_deals_prefiltered_for_repcount ( provider_id, claimant_id, piece_id, is_filplus );
 ANALYZE egd.mv_deals_prefiltered_for_repcount;
@@ -990,34 +993,36 @@ perl -E '
     ( map { "
 CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_${_} AS
   (
-    SELECT
-        piece_id,
-        claimant_id,
-        ${_}_id,
-        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
-        ( COUNT(*) )::SMALLINT AS replicas_any
-      FROM egd.mv_deals_prefiltered_for_repcount
-      JOIN egd.providers USING ( provider_id )
-    WHERE claimant_id != 0
-    GROUP BY
-      piece_id, ${_}_id, claimant_id
-  )
-    UNION ALL
-  (
-    SELECT
-        piece_id,
-        NULL::INTEGER,
-        ${_}_id,
-        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
-        ( COUNT(*) )::SMALLINT AS replicas_any
-      FROM egd.mv_deals_prefiltered_for_repcount
-      JOIN egd.providers USING ( provider_id )
-    WHERE claimant_id = 0
-    GROUP BY GROUPING SETS (
-      @{[ ( $_ eq q{continent} ) ? q{( piece_id ),} : q{} ]}
-      ( piece_id, ${_}_id )
+    (
+      SELECT
+          piece_id,
+          claimant_id,
+          ${_}_id,
+          ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+          ( COUNT(*) )::SMALLINT AS replicas_any
+        FROM egd.mv_deals_prefiltered_for_repcount
+        JOIN egd.providers USING ( provider_id )
+      WHERE claimant_id != 0
+      GROUP BY
+        piece_id, ${_}_id, claimant_id
     )
-  )
+      UNION ALL
+    (
+      SELECT
+          piece_id,
+          NULL::INTEGER,
+          ${_}_id,
+          ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+          ( COUNT(*) )::SMALLINT AS replicas_any
+        FROM egd.mv_deals_prefiltered_for_repcount
+        JOIN egd.providers USING ( provider_id )
+      WHERE claimant_id = 0
+      GROUP BY GROUPING SETS (
+        @{[ ( $_ eq q{continent} ) ? q{( piece_id ),} : q{} ]}
+        ( piece_id, ${_}_id )
+      )
+    )
+  ) ORDER BY piece_id, ${_}_id, claimant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_${_}_idx ON egd.mv_replicas_${_} ( piece_id, ${_}_id, claimant_id );
 ANALYZE egd.mv_replicas_${_};
@@ -1065,6 +1070,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_${_} AS
         ( t.tenant_meta->\x{27}max\x{27}->\x{27}per_${_}\x{27} )::SMALLINT <= r.replicas_any
       )
     )
+  ORDER BY piece_id, ${_}_id, tenant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_${_}_idx ON egd.mv_overreplicated_${_} ( piece_id, ${_}_id, tenant_id );
 ANALYZE egd.mv_overreplicated_${_};
@@ -1079,34 +1085,36 @@ ANALYZE egd.mv_overreplicated_${_};
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_continent AS
   (
-    SELECT
-        piece_id,
-        claimant_id,
-        continent_id,
-        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
-        ( COUNT(*) )::SMALLINT AS replicas_any
-      FROM egd.mv_deals_prefiltered_for_repcount
-      JOIN egd.providers USING ( provider_id )
-    WHERE claimant_id != 0
-    GROUP BY
-      piece_id, continent_id, claimant_id
-  )
-    UNION ALL
-  (
-    SELECT
-        piece_id,
-        NULL::INTEGER,
-        continent_id,
-        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
-        ( COUNT(*) )::SMALLINT AS replicas_any
-      FROM egd.mv_deals_prefiltered_for_repcount
-      JOIN egd.providers USING ( provider_id )
-    WHERE claimant_id = 0
-    GROUP BY GROUPING SETS (
-      ( piece_id ),
-      ( piece_id, continent_id )
+    (
+      SELECT
+          piece_id,
+          claimant_id,
+          continent_id,
+          ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+          ( COUNT(*) )::SMALLINT AS replicas_any
+        FROM egd.mv_deals_prefiltered_for_repcount
+        JOIN egd.providers USING ( provider_id )
+      WHERE claimant_id != 0
+      GROUP BY
+        piece_id, continent_id, claimant_id
     )
-  )
+      UNION ALL
+    (
+      SELECT
+          piece_id,
+          NULL::INTEGER,
+          continent_id,
+          ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+          ( COUNT(*) )::SMALLINT AS replicas_any
+        FROM egd.mv_deals_prefiltered_for_repcount
+        JOIN egd.providers USING ( provider_id )
+      WHERE claimant_id = 0
+      GROUP BY GROUPING SETS (
+        ( piece_id ),
+        ( piece_id, continent_id )
+      )
+    )
+  ) ORDER BY piece_id, continent_id, claimant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_continent_idx ON egd.mv_replicas_continent ( piece_id, continent_id, claimant_id );
 ANALYZE egd.mv_replicas_continent;
@@ -1154,6 +1162,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_continent AS
         ( t.tenant_meta->'max'->'per_continent' )::SMALLINT <= r.replicas_any
       )
     )
+  ORDER BY piece_id, continent_id, tenant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_continent_idx ON egd.mv_overreplicated_continent ( piece_id, continent_id, tenant_id );
 ANALYZE egd.mv_overreplicated_continent;
@@ -1161,34 +1170,36 @@ ANALYZE egd.mv_overreplicated_continent;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_country AS
   (
-    SELECT
-        piece_id,
-        claimant_id,
-        country_id,
-        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
-        ( COUNT(*) )::SMALLINT AS replicas_any
-      FROM egd.mv_deals_prefiltered_for_repcount
-      JOIN egd.providers USING ( provider_id )
-    WHERE claimant_id != 0
-    GROUP BY
-      piece_id, country_id, claimant_id
-  )
-    UNION ALL
-  (
-    SELECT
-        piece_id,
-        NULL::INTEGER,
-        country_id,
-        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
-        ( COUNT(*) )::SMALLINT AS replicas_any
-      FROM egd.mv_deals_prefiltered_for_repcount
-      JOIN egd.providers USING ( provider_id )
-    WHERE claimant_id = 0
-    GROUP BY GROUPING SETS (
-
-      ( piece_id, country_id )
+    (
+      SELECT
+          piece_id,
+          claimant_id,
+          country_id,
+          ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+          ( COUNT(*) )::SMALLINT AS replicas_any
+        FROM egd.mv_deals_prefiltered_for_repcount
+        JOIN egd.providers USING ( provider_id )
+      WHERE claimant_id != 0
+      GROUP BY
+        piece_id, country_id, claimant_id
     )
-  )
+      UNION ALL
+    (
+      SELECT
+          piece_id,
+          NULL::INTEGER,
+          country_id,
+          ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+          ( COUNT(*) )::SMALLINT AS replicas_any
+        FROM egd.mv_deals_prefiltered_for_repcount
+        JOIN egd.providers USING ( provider_id )
+      WHERE claimant_id = 0
+      GROUP BY GROUPING SETS (
+
+        ( piece_id, country_id )
+      )
+    )
+  ) ORDER BY piece_id, country_id, claimant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_country_idx ON egd.mv_replicas_country ( piece_id, country_id, claimant_id );
 ANALYZE egd.mv_replicas_country;
@@ -1236,6 +1247,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_country AS
         ( t.tenant_meta->'max'->'per_country' )::SMALLINT <= r.replicas_any
       )
     )
+  ORDER BY piece_id, country_id, tenant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_country_idx ON egd.mv_overreplicated_country ( piece_id, country_id, tenant_id );
 ANALYZE egd.mv_overreplicated_country;
@@ -1243,34 +1255,36 @@ ANALYZE egd.mv_overreplicated_country;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_city AS
   (
-    SELECT
-        piece_id,
-        claimant_id,
-        city_id,
-        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
-        ( COUNT(*) )::SMALLINT AS replicas_any
-      FROM egd.mv_deals_prefiltered_for_repcount
-      JOIN egd.providers USING ( provider_id )
-    WHERE claimant_id != 0
-    GROUP BY
-      piece_id, city_id, claimant_id
-  )
-    UNION ALL
-  (
-    SELECT
-        piece_id,
-        NULL::INTEGER,
-        city_id,
-        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
-        ( COUNT(*) )::SMALLINT AS replicas_any
-      FROM egd.mv_deals_prefiltered_for_repcount
-      JOIN egd.providers USING ( provider_id )
-    WHERE claimant_id = 0
-    GROUP BY GROUPING SETS (
-
-      ( piece_id, city_id )
+    (
+      SELECT
+          piece_id,
+          claimant_id,
+          city_id,
+          ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+          ( COUNT(*) )::SMALLINT AS replicas_any
+        FROM egd.mv_deals_prefiltered_for_repcount
+        JOIN egd.providers USING ( provider_id )
+      WHERE claimant_id != 0
+      GROUP BY
+        piece_id, city_id, claimant_id
     )
-  )
+      UNION ALL
+    (
+      SELECT
+          piece_id,
+          NULL::INTEGER,
+          city_id,
+          ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+          ( COUNT(*) )::SMALLINT AS replicas_any
+        FROM egd.mv_deals_prefiltered_for_repcount
+        JOIN egd.providers USING ( provider_id )
+      WHERE claimant_id = 0
+      GROUP BY GROUPING SETS (
+
+        ( piece_id, city_id )
+      )
+    )
+  ) ORDER BY piece_id, city_id, claimant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_city_idx ON egd.mv_replicas_city ( piece_id, city_id, claimant_id );
 ANALYZE egd.mv_replicas_city;
@@ -1318,6 +1332,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_city AS
         ( t.tenant_meta->'max'->'per_city' )::SMALLINT <= r.replicas_any
       )
     )
+  ORDER BY piece_id, city_id, tenant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_city_idx ON egd.mv_overreplicated_city ( piece_id, city_id, tenant_id );
 ANALYZE egd.mv_overreplicated_city;
@@ -1325,34 +1340,36 @@ ANALYZE egd.mv_overreplicated_city;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_org AS
   (
-    SELECT
-        piece_id,
-        claimant_id,
-        org_id,
-        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
-        ( COUNT(*) )::SMALLINT AS replicas_any
-      FROM egd.mv_deals_prefiltered_for_repcount
-      JOIN egd.providers USING ( provider_id )
-    WHERE claimant_id != 0
-    GROUP BY
-      piece_id, org_id, claimant_id
-  )
-    UNION ALL
-  (
-    SELECT
-        piece_id,
-        NULL::INTEGER,
-        org_id,
-        ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
-        ( COUNT(*) )::SMALLINT AS replicas_any
-      FROM egd.mv_deals_prefiltered_for_repcount
-      JOIN egd.providers USING ( provider_id )
-    WHERE claimant_id = 0
-    GROUP BY GROUPING SETS (
-
-      ( piece_id, org_id )
+    (
+      SELECT
+          piece_id,
+          claimant_id,
+          org_id,
+          ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+          ( COUNT(*) )::SMALLINT AS replicas_any
+        FROM egd.mv_deals_prefiltered_for_repcount
+        JOIN egd.providers USING ( provider_id )
+      WHERE claimant_id != 0
+      GROUP BY
+        piece_id, org_id, claimant_id
     )
-  )
+      UNION ALL
+    (
+      SELECT
+          piece_id,
+          NULL::INTEGER,
+          org_id,
+          ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
+          ( COUNT(*) )::SMALLINT AS replicas_any
+        FROM egd.mv_deals_prefiltered_for_repcount
+        JOIN egd.providers USING ( provider_id )
+      WHERE claimant_id = 0
+      GROUP BY GROUPING SETS (
+
+        ( piece_id, org_id )
+      )
+    )
+  ) ORDER BY piece_id, org_id, claimant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_org_idx ON egd.mv_replicas_org ( piece_id, org_id, claimant_id );
 ANALYZE egd.mv_replicas_org;
@@ -1400,6 +1417,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_org AS
         ( t.tenant_meta->'max'->'per_org' )::SMALLINT <= r.replicas_any
       )
     )
+  ORDER BY piece_id, org_id, tenant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_org_idx ON egd.mv_overreplicated_org ( piece_id, org_id, tenant_id );
 ANALYZE egd.mv_overreplicated_org;
@@ -1450,6 +1468,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_total AS
         ( t.tenant_meta->'max'->'total_replicas' )::SMALLINT <= r.replicas_any
       )
     )
+  ORDER BY piece_id, tenant_id
 ;
 CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_total_idx ON egd.mv_overreplicated_total ( piece_id, tenant_id );
 ANALYZE egd.mv_overreplicated_total;
@@ -1463,13 +1482,16 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_orglocal_presence AS
       p.org_id
     FROM egd.published_deals pd
     JOIN egd.providers p USING ( provider_id )
-    LEFT JOIN egd.invalidated_deals USING ( deal_id )
+    LEFT JOIN egd.invalidated_deals id USING ( deal_id )
   WHERE
-    invalidated_deals.deal_id IS NULL
+    p.org_id != 0
       AND
     pd.status != 'terminated'
+      AND
+    id.deal_id IS NULL
+  ORDER BY pd.piece_id, p.org_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_orglocal_presence_key ON egd.mv_orglocal_presence ( org_id, piece_id );
+CREATE UNIQUE INDEX IF NOT EXISTS mv_orglocal_presence_key ON egd.mv_orglocal_presence ( piece_id, org_id );
 ANALYZE egd.mv_orglocal_presence;
 
 
