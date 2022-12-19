@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/filecoin-project/evergreen-dealer/webapi/types"
+	apitypes "github.com/data-preservation-programs/go-spade-apitypes"
 	"github.com/labstack/echo/v4"
 )
 
@@ -10,7 +10,7 @@ func apiSpStatus(c echo.Context) error {
 
 	return retFail(
 		c,
-		types.ErrSystemTemporarilyDisabled,
+		apitypes.ErrSystemTemporarilyDisabled,
 		`
                                             !!! COMING SOON !!!
 

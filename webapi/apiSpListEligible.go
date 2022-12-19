@@ -5,21 +5,22 @@ import (
 	"net/http"
 	"strings"
 
-	cmn "github.com/filecoin-project/evergreen-dealer/common"
-	"github.com/filecoin-project/evergreen-dealer/webapi/types"
+	apitypes "github.com/data-preservation-programs/go-spade-apitypes"
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/labstack/echo/v4"
+	"github.com/ribasushi/go-toolbox/cmn"
+	"github.com/ribasushi/spade/internal/app"
 )
 
 func apiSpListEligible(c echo.Context) error {
 	ctx, ctxMeta := unpackAuthedEchoContext(c)
 
-	lim := uint64(cmn.ListEligibleDefaultSize)
+	lim := uint64(listEligibleDefaultSize)
 	if c.QueryParams().Has("limit") {
 		var err error
-		lim, err = parseUIntQueryParam(c, "limit", 1, cmn.ListEligibleMaxSize)
+		lim, err = parseUIntQueryParam(c, "limit", 1, listEligibleMaxSize)
 		if err != nil {
-			return retFail(c, types.ErrInvalidRequest, err.Error())
+			return retFail(c, apitypes.ErrInvalidRequest, err.Error())
 		}
 	}
 
@@ -27,7 +28,7 @@ func apiSpListEligible(c echo.Context) error {
 	if c.QueryParams().Has("tenant") {
 		tid, err := parseUIntQueryParam(c, "tenant", 1, 1<<15)
 		if err != nil {
-			return retFail(c, types.ErrInvalidRequest, err.Error())
+			return retFail(c, apitypes.ErrInvalidRequest, err.Error())
 		}
 		tenantID = int16(tid)
 	}
@@ -45,7 +46,7 @@ func apiSpListEligible(c echo.Context) error {
 		if truthyBoolQueryParam(c, "internal-nolateral") {
 			useQueryFunc = "pieces_eligible_full"
 		}
-	} else if lim > cmn.ListEligibleDefaultSize { // deduce from requested lim
+	} else if lim > listEligibleDefaultSize { // deduce from requested lim
 		useQueryFunc = "pieces_eligible_full"
 	}
 
@@ -53,14 +54,14 @@ func apiSpListEligible(c echo.Context) error {
 		PieceID       int64
 		PieceLog2Size uint8
 		pieceSources
-		*types.Piece
+		*apitypes.Piece
 	}, 0, lim+1)
 
 	if err := pgxscan.Select(
 		ctx,
-		cmn.Db,
+		ctxMeta.Db[app.DbMain],
 		&orderedPieces,
-		fmt.Sprintf("SELECT * FROM egd.%s( $1, $2, $3, $4, $5 )", useQueryFunc),
+		fmt.Sprintf("SELECT * FROM spd.%s( $1, $2, $3, $4, $5 )", useQueryFunc),
 		ctxMeta.authedActorID,
 		lim+1, // ask for one extra, to disambiguate "there is more"
 		tenantID,
@@ -105,8 +106,8 @@ func apiSpListEligible(c echo.Context) error {
 		orderedPieces = orderedPieces[:lim]
 
 		exLim := lim
-		if exLim < cmn.ListEligibleDefaultSize {
-			exLim = cmn.ListEligibleDefaultSize
+		if exLim < listEligibleDefaultSize {
+			exLim = listEligibleDefaultSize
 		}
 
 		info = append(
@@ -121,7 +122,7 @@ func apiSpListEligible(c echo.Context) error {
 	}
 
 	srcPtrs := make(piecePointers, len(orderedPieces))
-	ret := make(types.ResponsePiecesEligible, len(orderedPieces))
+	ret := make(apitypes.ResponsePiecesEligible, len(orderedPieces))
 	for i, p := range orderedPieces {
 		p.PaddedPieceSize = 1 << p.PieceLog2Size
 		p.SampleRequestCmd = curlAuthedForSP(c, ctxMeta.authedActorID, "/sp/request_piece/"+p.PieceCid)

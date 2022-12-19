@@ -14,7 +14,7 @@ use SQL::Translator;
 
   __PACKAGE__->loader_options (
     naming => 'v8',
-    db_schema => 'egd',
+    db_schema => 'spd',
     exclude => qr/^(?: debug  | metrics )/x,
   );
 }
@@ -38,7 +38,7 @@ $SIG{__WARN__} = sigwarn_silencer(qr/collides with an inherited method/);
   };
 }
 
-my $schema = GraphedSchema->connect('dbi:Pg:service=egd');
+my $schema = GraphedSchema->connect('dbi:Pg:service=spd');
 $schema->storage->ensure_connected;
 delete $schema->source('PublishedDeal')->{_relationships}{$_} for qw( proposal invalidated_deal ); # bugs, bugs everywhere :(
 

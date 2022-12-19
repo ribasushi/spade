@@ -10,11 +10,13 @@ import (
 	"strings"
 	"time"
 
+	apitypes "github.com/data-preservation-programs/go-spade-apitypes"
 	"github.com/dgraph-io/ristretto"
-	cmn "github.com/filecoin-project/evergreen-dealer/common"
-	"github.com/filecoin-project/evergreen-dealer/webapi/types"
 	"github.com/jackc/pgx/v4"
 	"github.com/labstack/echo/v4"
+	"github.com/ribasushi/go-toolbox-interplanetary/fil"
+	"github.com/ribasushi/go-toolbox/cmn"
+	"github.com/ribasushi/spade/internal/app"
 	"golang.org/x/xerrors"
 )
 
@@ -41,7 +43,7 @@ func parseUIntQueryParam(c echo.Context, pname string, min, max uint64) (uint64,
 	return val, nil
 }
 
-func retPayloadAnnotated(c echo.Context, httpCode int, errCode types.APIErrorCode, payload types.ResponsePayload, fmsg string, args ...interface{}) error {
+func retPayloadAnnotated(c echo.Context, httpCode int, errCode apitypes.APIErrorCode, payload apitypes.ResponsePayload, fmsg string, args ...interface{}) error {
 	ctx, ctxMeta := unpackAuthedEchoContext(c)
 
 	msg := fmt.Sprintf(fmsg, args...)
@@ -61,8 +63,8 @@ func retPayloadAnnotated(c echo.Context, httpCode int, errCode types.APIErrorCod
 		}
 	}
 
-	r := types.ResponseEnvelope{
-		RequestID:          c.Request().Header.Get("X-EGD-REQUEST-UUID"),
+	r := apitypes.ResponseEnvelope{
+		RequestID:          c.Request().Header.Get("X-SPADE-REQUEST-UUID"),
 		ResponseStateEpoch: int64(ctxMeta.stateEpoch),
 		ResponseTime:       time.Now(),
 		ResponseCode:       httpCode,
@@ -91,10 +93,10 @@ func retPayloadAnnotated(c echo.Context, httpCode int, errCode types.APIErrorCod
 			if err != nil {
 				return cmn.WrErr(err)
 			}
-			if _, err := cmn.Db.Exec(
+			if _, err := ctxMeta.Db[app.DbMain].Exec(
 				ctx,
 				`
-				UPDATE egd.requests SET
+				UPDATE spd.requests SET
 					request_meta = JSONB_STRIP_NULLS( request_meta || JSONB_BUILD_OBJECT(
 						'error', $1::TEXT,
 						'error_code', $2::INTEGER,
@@ -119,7 +121,7 @@ func retPayloadAnnotated(c echo.Context, httpCode int, errCode types.APIErrorCod
 	return c.JSONPretty(httpCode, r, "  ")
 }
 
-func curlAuthedForSP(c echo.Context, spID cmn.ActorID, path string) string {
+func curlAuthedForSP(c echo.Context, spID fil.ActorID, path string) string {
 	prot := c.Request().Header.Get("X-Forwarded-Proto")
 	if prot == "" {
 		prot = "http"
@@ -134,7 +136,7 @@ func curlAuthedForSP(c echo.Context, spID cmn.ActorID, path string) string {
 	)
 }
 
-func retFail(c echo.Context, errCode types.APIErrorCode, fMsg string, args ...interface{}) error {
+func retFail(c echo.Context, errCode apitypes.APIErrorCode, fMsg string, args ...interface{}) error {
 	return retPayloadAnnotated(
 		c,
 		http.StatusForbidden, // DO NOT use 400: we rewrite that on the nginx level to normalize a class of transport errors
@@ -149,7 +151,7 @@ func retAuthFail(c echo.Context, f string, args ...interface{}) error {
 	return retPayloadAnnotated(
 		c,
 		http.StatusUnauthorized,
-		types.ErrUnauthorizedAccess,
+		apitypes.ErrUnauthorizedAccess,
 		nil,
 		echo.ErrUnauthorized.Error()+"\n\n"+f,
 		args...,
@@ -162,7 +164,7 @@ var providerEligibleCache, _ = ristretto.NewCache(&ristretto.Config{
 	Cost:    func(interface{}) int64 { return 1 },
 })
 
-func ineligibleSpMsg(spID cmn.ActorID) string {
+func ineligibleSpMsg(spID fil.ActorID) string {
 	return fmt.Sprintf(
 		`
 At the time of this request Storage provider %s is not eligible to use this API
@@ -182,15 +184,16 @@ administrators in #spade over at the Fil Slack https://filecoin.io/slack
 	)
 }
 
-func spIneligibleErr(ctx context.Context, spID cmn.ActorID) (defIneligibleCode types.APIErrorCode, defErr error) {
+func spIneligibleErr(ctx context.Context, spID fil.ActorID) (defIneligibleCode apitypes.APIErrorCode, defErr error) {
+	_, _, db, gctx := app.UnpackCtx(ctx)
 
 	// do not cache chain-independent factors
 	var ignoreChainEligibility bool
-	err := cmn.Db.QueryRow(
+	err := db.QueryRow(
 		ctx,
 		`
 		SELECT COALESCE( ( provider_meta->'ignore_chain_eligibility' )::BOOL, false )
-			FROM egd.providers
+			FROM spd.providers
 		WHERE
 			NOT COALESCE( ( provider_meta->'globally_inactivated' )::BOOL, false )
 				AND
@@ -199,7 +202,7 @@ func spIneligibleErr(ctx context.Context, spID cmn.ActorID) (defIneligibleCode t
 		spID,
 	).Scan(&ignoreChainEligibility)
 	if err == pgx.ErrNoRows {
-		return types.ErrStorageProviderSuspended, nil
+		return apitypes.ErrStorageProviderSuspended, nil
 	} else if err != nil {
 		return 0, cmn.WrErr(err)
 	} else if ignoreChainEligibility {
@@ -216,20 +219,20 @@ func spIneligibleErr(ctx context.Context, spID cmn.ActorID) (defIneligibleCode t
 	}()
 
 	if protoReason, found := providerEligibleCache.Get(uint64(spID)); found {
-		return protoReason.(types.APIErrorCode), nil
+		return protoReason.(apitypes.APIErrorCode), nil
 	}
 
-	curTipset, err := cmn.DefaultLookbackTipset(ctx)
+	curTipset, err := app.DefaultLookbackTipset(ctx)
 	if err != nil {
 		return 0, cmn.WrErr(err)
 	}
 
-	mbi, err := cmn.LotusAPIHeavy.MinerGetBaseInfo(ctx, spID.AsFilAddr(), curTipset.Height(), curTipset.Key())
+	mbi, err := gctx.LotusAPI[app.FilHeavy].MinerGetBaseInfo(ctx, spID.AsFilAddr(), curTipset.Height(), curTipset.Key())
 	if err != nil {
 		return 0, cmn.WrErr(err)
 	}
 	if mbi == nil || !mbi.EligibleForMining {
-		return types.ErrStorageProviderIneligibleToMine, nil
+		return apitypes.ErrStorageProviderIneligibleToMine, nil
 	}
 
 	return 0, nil

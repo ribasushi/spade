@@ -6,21 +6,23 @@ import (
 	"sort"
 	"time"
 
-	cmn "github.com/filecoin-project/evergreen-dealer/common"
-	"github.com/filecoin-project/evergreen-dealer/webapi/types"
+	apitypes "github.com/data-preservation-programs/go-spade-apitypes"
 	filabi "github.com/filecoin-project/go-state-types/abi"
 	filbuiltin "github.com/filecoin-project/go-state-types/builtin"
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/labstack/echo/v4"
+	"github.com/ribasushi/go-toolbox-interplanetary/fil"
+	"github.com/ribasushi/go-toolbox/cmn"
+	"github.com/ribasushi/spade/internal/app"
 )
 
 func apiSpListPendingProposals(c echo.Context) error {
 	ctx, ctxMeta := unpackAuthedEchoContext(c)
 
 	type pendingProposals struct {
-		types.DealProposal
+		apitypes.DealProposal
 		pieceSources
-		ClientID          cmn.ActorID
+		ClientID          fil.ActorID
 		PieceID           int64
 		ProposalFailstamp int64
 		Error             *string
@@ -32,7 +34,7 @@ func apiSpListPendingProposals(c echo.Context) error {
 
 	if err := pgxscan.Select(
 		ctx,
-		cmn.Db,
+		ctxMeta.Db[app.DbMain],
 		&pending,
 		`
 		SELECT
@@ -49,7 +51,7 @@ func apiSpListPendingProposals(c echo.Context) error {
 				pr.proposal_meta->>'failure' AS error,
 				( EXISTS (
 					SELECT 42
-						FROM egd.published_deals pd
+						FROM spd.published_deals pd
 					WHERE
 						pd.piece_id = pr.piece_id
 							AND
@@ -61,10 +63,10 @@ func apiSpListPendingProposals(c echo.Context) error {
 				) ) AS is_published,
 				COALESCE( ( pa.coarse_latest_active_end_epoch IS NOT NULL ), false ) AS has_sources_fil_active,
 				false AS has_sources_http
-			FROM egd.proposals pr
-			JOIN egd.pieces p USING ( piece_id )
-			JOIN egd.clients c USING ( client_id )
-			LEFT JOIN egd.mv_pieces_availability pa USING ( piece_id )
+			FROM spd.proposals pr
+			JOIN spd.pieces p USING ( piece_id )
+			JOIN spd.clients c USING ( client_id )
+			LEFT JOIN spd.mv_pieces_availability pa USING ( piece_id )
 		WHERE
 			pr.provider_id = $1
 				AND
@@ -76,7 +78,7 @@ func apiSpListPendingProposals(c echo.Context) error {
 				pr.proposal_failstamp = 0
 					OR
 				-- show everything failed in the past N hours
-				pr.proposal_failstamp > ( egd.big_now() - $3::BIGINT * 3600 * 1000 * 1000 * 1000 )
+				pr.proposal_failstamp > ( spd.big_now() - $3::BIGINT * 3600 * 1000 * 1000 * 1000 )
 			)
 		ORDER BY
 			pr.proposal_failstamp DESC,
@@ -85,8 +87,8 @@ func apiSpListPendingProposals(c echo.Context) error {
 			p.piece_cid
 		`,
 		ctxMeta.authedActorID,
-		cmn.WallTimeEpoch(time.Now())+filbuiltin.EpochsInHour-28000,
-		cmn.ShowRecentFailuresHours,
+		fil.WallTimeEpoch(time.Now())+filbuiltin.EpochsInHour-28000,
+		showRecentFailuresHours,
 	); err != nil {
 		return cmn.WrErr(err)
 	}
@@ -98,9 +100,9 @@ func apiSpListPendingProposals(c echo.Context) error {
 
 	var toPropose, toActivate, outstandingBytes int64
 	srcPtrs := make(piecePointers, len(pending))
-	fails := make(map[dealTuple]types.ProposalFailure)
-	ret := types.ResponsePendingProposals{
-		PendingProposals: make([]types.DealProposal, 0, len(pending)),
+	fails := make(map[dealTuple]apitypes.ProposalFailure)
+	ret := apitypes.ResponsePendingProposals{
+		PendingProposals: make([]apitypes.DealProposal, 0, len(pending)),
 	}
 
 	for _, p := range pending {
@@ -113,7 +115,7 @@ func apiSpListPendingProposals(c echo.Context) error {
 
 		case p.ProposalFailstamp > 0:
 			t := dealTuple{pieceID: p.PieceID, tenantID: p.TenantID}
-			f := types.ProposalFailure{
+			f := apitypes.ProposalFailure{
 				ErrorTimeStamp: time.Unix(0, p.ProposalFailstamp),
 				Error:          *p.Error,
 				PieceCid:       p.PieceCid,
@@ -132,7 +134,7 @@ func apiSpListPendingProposals(c echo.Context) error {
 
 		default:
 			dp := p.DealProposal
-			dp.StartTime = cmn.MainnetTime(filabi.ChainEpoch(dp.StartEpoch))
+			dp.StartTime = fil.MainnetTime(filabi.ChainEpoch(dp.StartEpoch))
 			dp.HoursRemaining = int(time.Until(dp.StartTime).Truncate(time.Hour).Hours())
 			dp.PieceSize = 1 << p.PieceLog2Size
 			dp.TenantClient = p.ClientID.String()
@@ -140,7 +142,7 @@ func apiSpListPendingProposals(c echo.Context) error {
 			if dp.ProposalCid != nil {
 				dp.ImportCmd = fmt.Sprintf("lotus-miner storage-deals import-data %s %s.car",
 					*dp.ProposalCid,
-					cmn.TrimCidString(dp.PieceCid),
+					apitypes.TrimCidString(dp.PieceCid),
 				)
 			}
 
@@ -174,9 +176,9 @@ You can request deal proposals using API endpoints as described in the docs`,
 	)
 
 	if len(fails) > 0 {
-		msg += fmt.Sprintf("\n\nIn the past %dh there were %d proposal errors, shown in recent_failures below.", cmn.ShowRecentFailuresHours, len(fails))
+		msg += fmt.Sprintf("\n\nIn the past %dh there were %d proposal errors, shown in recent_failures below.", showRecentFailuresHours, len(fails))
 
-		ret.RecentFailures = make([]types.ProposalFailure, 0, len(fails))
+		ret.RecentFailures = make([]apitypes.ProposalFailure, 0, len(fails))
 		for _, f := range fails {
 			ret.RecentFailures = append(ret.RecentFailures, f)
 		}

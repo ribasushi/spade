@@ -5,16 +5,18 @@ import (
 	"fmt"
 	"sync"
 
-	cmn "github.com/filecoin-project/evergreen-dealer/common"
-	"github.com/filecoin-project/evergreen-dealer/webapi/types"
+	apitypes "github.com/data-preservation-programs/go-spade-apitypes"
 	filabi "github.com/filecoin-project/go-state-types/abi"
+	"github.com/ribasushi/go-toolbox-interplanetary/fil"
+	"github.com/ribasushi/go-toolbox/cmn"
+	"github.com/ribasushi/spade/internal/app"
 	"golang.org/x/sync/errgroup"
 )
 
 type piecePointers map[int64]pieceSources
 
 type pieceSources struct {
-	sourcesPointer      *[]types.DataSource
+	sourcesPointer      *[]apitypes.DataSource
 	pieceCid            string
 	HasSourcesFilActive bool
 	HasSourcesHTTP      bool
@@ -59,7 +61,7 @@ func injectActiveFilDAG(ctx context.Context, ids []int64, ptrs piecePointers, on
 		)
 	}
 
-	rows, err := cmn.Db.Query(
+	rows, err := app.GetGlobalCtx(ctx).Db[app.DbMain].Query(
 		ctx,
 		fmt.Sprintf(
 			`
@@ -70,8 +72,8 @@ func injectActiveFilDAG(ctx context.Context, ids []int64, ptrs piecePointers, on
 					provider_id,
 					is_filplus,
 					proposal_label
-				FROM egd.known_fildag_deals_ranked kfdr
-				JOIN egd.providers p USING ( provider_id )
+				FROM spd.known_fildag_deals_ranked kfdr
+				JOIN spd.providers p USING ( provider_id )
 			WHERE
 				rank = 1
 					AND
@@ -93,15 +95,15 @@ func injectActiveFilDAG(ctx context.Context, ids []int64, ptrs piecePointers, on
 
 	var spID, pieceID int64
 	for rows.Next() {
-		var srcEntry types.FilSourceDAG
+		var srcEntry apitypes.FilSourceDAG
 		var dealEndEpoch filabi.ChainEpoch
 
 		if err := rows.Scan(&pieceID, &srcEntry.DealID, &dealEndEpoch, &spID, &srcEntry.IsFilplus, &srcEntry.OriginalPayloadCid); err != nil {
 			return cmn.WrErr(err)
 		}
 		p := ptrs[pieceID]
-		srcEntry.ProviderID = cmn.ActorID(spID).String()
-		srcEntry.DealExpiration = cmn.MainnetTime(dealEndEpoch)
+		srcEntry.ProviderID = fil.ActorID(spID).String()
+		srcEntry.DealExpiration = fil.MainnetTime(dealEndEpoch)
 		if err := srcEntry.InitDerivedVals(p.pieceCid); err != nil {
 			return cmn.WrErr(err)
 		}

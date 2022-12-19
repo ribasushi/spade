@@ -5,54 +5,54 @@
 --   psql service=XYZ < misc/pg_schema.sql
 --
 
-CREATE SCHEMA IF NOT EXISTS egd;
+CREATE SCHEMA IF NOT EXISTS spd;
 
 CREATE OR REPLACE
-  FUNCTION egd.big_now() RETURNS BIGINT
+  FUNCTION spd.big_now() RETURNS BIGINT
 LANGUAGE sql PARALLEL SAFE VOLATILE STRICT AS $$
   SELECT ( EXTRACT( EPOCH from CLOCK_TIMESTAMP() )::NUMERIC * 1000000000 )::BIGINT
 $$;
 
 CREATE OR REPLACE
-  FUNCTION egd.coarse_epoch(INTEGER) RETURNS INTEGER
+  FUNCTION spd.coarse_epoch(INTEGER) RETURNS INTEGER
 LANGUAGE sql PARALLEL SAFE IMMUTABLE STRICT AS $$
   -- round down to the nearest week
   SELECT ( $1 / ( 7 * 2880 ) )::INTEGER * 7 * 2880
 $$;
 
 CREATE OR REPLACE
-  FUNCTION egd.ts_from_epoch(INTEGER) RETURNS TIMESTAMP WITH TIME ZONE
+  FUNCTION spd.ts_from_epoch(INTEGER) RETURNS TIMESTAMP WITH TIME ZONE
 LANGUAGE sql PARALLEL SAFE IMMUTABLE STRICT AS $$
   SELECT TIMEZONE( 'UTC', TO_TIMESTAMP( $1 * 30::BIGINT + 1598306400 ) )
 $$;
 
 CREATE OR REPLACE
-  FUNCTION egd.epoch_from_ts(TIMESTAMP WITH TIME ZONE) RETURNS INTEGER
+  FUNCTION spd.epoch_from_ts(TIMESTAMP WITH TIME ZONE) RETURNS INTEGER
 LANGUAGE sql PARALLEL SAFE IMMUTABLE STRICT AS $$
   SELECT ( EXTRACT( EPOCH FROM $1 )::BIGINT - 1598306400 ) / 30
 $$;
 
 CREATE OR REPLACE
-  FUNCTION egd.replica_expiration_cutoff_epoch() RETURNS INTEGER
+  FUNCTION spd.replica_expiration_cutoff_epoch() RETURNS INTEGER
 LANGUAGE sql PARALLEL RESTRICTED STABLE AS $$
-  SELECT egd.epoch_from_ts( DATE_TRUNC( 'day', NOW() + '45 days'::INTERVAL ) )
+  SELECT spd.epoch_from_ts( DATE_TRUNC( 'day', NOW() + '45 days'::INTERVAL ) )
 $$;
 
 CREATE OR REPLACE
-  FUNCTION egd.proposal_deduplication_recent_cutoff_epoch() RETURNS INTEGER
+  FUNCTION spd.proposal_deduplication_recent_cutoff_epoch() RETURNS INTEGER
 LANGUAGE sql PARALLEL RESTRICTED STABLE AS $$
-  SELECT egd.epoch_from_ts( DATE_TRUNC( 'hour', NOW() - '1 days'::INTERVAL ) )
+  SELECT spd.epoch_from_ts( DATE_TRUNC( 'hour', NOW() - '1 days'::INTERVAL ) )
 $$;
 
 CREATE OR REPLACE
-  FUNCTION egd.valid_cid_v1(TEXT) RETURNS BOOLEAN
+  FUNCTION spd.valid_cid_v1(TEXT) RETURNS BOOLEAN
     LANGUAGE sql PARALLEL SAFE IMMUTABLE STRICT
 AS $$
   SELECT SUBSTRING( $1 FROM 1 FOR 2 ) = 'ba'
 $$;
 
 CREATE OR REPLACE
-  FUNCTION egd.valid_cid(TEXT) RETURNS BOOLEAN
+  FUNCTION spd.valid_cid(TEXT) RETURNS BOOLEAN
     LANGUAGE sql PARALLEL SAFE IMMUTABLE STRICT
 AS $$
   SELECT ( SUBSTRING( $1 FROM 1 FOR 2 ) = 'ba' OR SUBSTRING( $1 FROM 1 FOR 2 ) = 'Qm' )
@@ -60,7 +60,7 @@ $$;
 
 
 CREATE OR REPLACE
-  FUNCTION egd.update_entry_timestamp() RETURNS TRIGGER
+  FUNCTION spd.update_entry_timestamp() RETURNS TRIGGER
     LANGUAGE plpgsql
 AS $$
 BEGIN
@@ -70,7 +70,7 @@ END;
 $$;
 
 
-CREATE TABLE IF NOT EXISTS egd.metrics (
+CREATE TABLE IF NOT EXISTS spd.metrics (
   name TEXT NOT NULL CONSTRAINT metric_name_lc CHECK ( name ~ '^[a-z0-9_]+$' ),
   dimensions TEXT[][] NOT NULL,
   description TEXT NOT NULL,
@@ -79,92 +79,92 @@ CREATE TABLE IF NOT EXISTS egd.metrics (
   collection_took_seconds NUMERIC NOT NULL,
   CONSTRAINT metric_uidx UNIQUE ( name, dimensions )
 );
-CREATE TABLE IF NOT EXISTS egd.metrics_log (
+CREATE TABLE IF NOT EXISTS spd.metrics_log (
   name TEXT NOT NULL,
   dimensions TEXT[][] NOT NULL,
   value BIGINT,
   collected_at TIMESTAMP WITH TIME ZONE NOT NULL,
   collection_took_seconds NUMERIC NOT NULL,
-  CONSTRAINT metrics_log_metric_fk FOREIGN KEY ( name, dimensions ) REFERENCES egd.metrics ( name, dimensions )
+  CONSTRAINT metrics_log_metric_fk FOREIGN KEY ( name, dimensions ) REFERENCES spd.metrics ( name, dimensions )
 );
-CREATE INDEX IF NOT EXISTS metrics_log_collected_name_dim ON egd.metrics_log ( collected_at, name );
+CREATE INDEX IF NOT EXISTS metrics_log_collected_name_dim ON spd.metrics_log ( collected_at, name );
 CREATE OR REPLACE
-  FUNCTION egd.record_metric_change() RETURNS TRIGGER
+  FUNCTION spd.record_metric_change() RETURNS TRIGGER
     LANGUAGE plpgsql
 AS $$
 BEGIN
-  INSERT INTO egd.metrics_log ( name, dimensions, value, collected_at, collection_took_seconds ) VALUES ( NEW.name, NEW.dimensions, NEW.value, NEW.collected_at, NEW.collection_took_seconds );
+  INSERT INTO spd.metrics_log ( name, dimensions, value, collected_at, collection_took_seconds ) VALUES ( NEW.name, NEW.dimensions, NEW.value, NEW.collected_at, NEW.collection_took_seconds );
   RETURN NULL;
 END;
 $$;
 CREATE OR REPLACE TRIGGER trigger_store_metric_logs
-  AFTER INSERT OR UPDATE ON egd.metrics
+  AFTER INSERT OR UPDATE ON spd.metrics
   FOR EACH ROW
-  EXECUTE PROCEDURE egd.record_metric_change()
+  EXECUTE PROCEDURE spd.record_metric_change()
 ;
 
-CREATE TABLE IF NOT EXISTS egd.global(
+CREATE TABLE IF NOT EXISTS spd.global(
   singleton_row BOOL NOT NULL UNIQUE CONSTRAINT single_row_in_table CHECK ( singleton_row IS TRUE ),
   metadata JSONB NOT NULL
 );
-INSERT INTO egd.global ( singleton_row, metadata ) VALUES ( true, '{ "schema_version":{ "major": 1, "minor": 0 } }' ) ON CONFLICT DO NOTHING;
+INSERT INTO spd.global ( singleton_row, metadata ) VALUES ( true, '{ "schema_version":{ "major": 1, "minor": 0 } }' ) ON CONFLICT DO NOTHING;
 
-CREATE TABLE IF NOT EXISTS egd.tenants (
+CREATE TABLE IF NOT EXISTS spd.tenants (
   tenant_id SMALLSERIAL NOT NULL UNIQUE,
   tenant_name TEXT NOT NULL UNIQUE,
   tenant_meta JSONB NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE IF NOT EXISTS egd.datasets (
+CREATE TABLE IF NOT EXISTS spd.datasets (
   dataset_id SMALLSERIAL NOT NULL UNIQUE,
   dataset_slug TEXT NOT NULL UNIQUE CONSTRAINT dataset_slug_lc CHECK ( dataset_slug ~ '^[a-z0-9\-]+$' ),
   dataset_meta JSONB NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE IF NOT EXISTS egd.tenants_datasets (
-  tenant_id SMALLINT NOT NULL REFERENCES egd.tenants ( tenant_id ) ON UPDATE CASCADE,
-  dataset_id SMALLINT NOT NULL REFERENCES egd.datasets ( dataset_id ) ON UPDATE CASCADE,
+CREATE TABLE IF NOT EXISTS spd.tenants_datasets (
+  tenant_id SMALLINT NOT NULL REFERENCES spd.tenants ( tenant_id ) ON UPDATE CASCADE,
+  dataset_id SMALLINT NOT NULL REFERENCES spd.datasets ( dataset_id ) ON UPDATE CASCADE,
   tenant_dataset_meta JSONB NOT NULL DEFAULT '{}',
   CONSTRAINT tenants_datasets_singleton UNIQUE ( tenant_id, dataset_id )
 );
 
-CREATE TABLE IF NOT EXISTS egd.pieces (
+CREATE TABLE IF NOT EXISTS spd.pieces (
   piece_id BIGINT NOT NULL UNIQUE,
-  piece_cid TEXT NOT NULL UNIQUE CONSTRAINT piece_valid_pcid CHECK ( egd.valid_cid_v1( piece_cid ) ),
+  piece_cid TEXT NOT NULL UNIQUE CONSTRAINT piece_valid_pcid CHECK ( spd.valid_cid_v1( piece_cid ) ),
   piece_log2_size SMALLINT NOT NULL CONSTRAINT piece_valid_size CHECK ( piece_log2_size > 0 ),
-  proposal_label TEXT CONSTRAINT piece_valid_lcid CHECK ( egd.valid_cid( proposal_label ) ),
+  proposal_label TEXT CONSTRAINT piece_valid_lcid CHECK ( spd.valid_cid( proposal_label ) ),
   piece_meta JSONB NOT NULL DEFAULT '{}',
   CONSTRAINT pieces_piece_size_key UNIQUE ( piece_log2_size, piece_id ), -- proposals FK
   CONSTRAINT pieces_piece_id_cid_key UNIQUE ( piece_id, piece_cid ) -- published_deals FK
 );
-CREATE INDEX IF NOT EXISTS pieces_unproven_size ON egd.pieces ( piece_id ) WHERE ( NOT COALESCE( (piece_meta->'size_proven_correct')::BOOL, false) );
+CREATE INDEX IF NOT EXISTS pieces_unproven_size ON spd.pieces ( piece_id ) WHERE ( NOT COALESCE( (piece_meta->'size_proven_correct')::BOOL, false) );
 CREATE OR REPLACE
-  FUNCTION egd.prefill_piece_id() RETURNS TRIGGER
+  FUNCTION spd.prefill_piece_id() RETURNS TRIGGER
     LANGUAGE plpgsql
 AS $$
 BEGIN
-  NEW.piece_id = ( SELECT COALESCE( MIN( piece_id ), 0 ) - 1 FROM egd.pieces );
+  NEW.piece_id = ( SELECT COALESCE( MIN( piece_id ), 0 ) - 1 FROM spd.pieces );
   RETURN NEW;
 END;
 $$;
 CREATE OR REPLACE TRIGGER trigger_fill_next_piece_id
-  BEFORE INSERT ON egd.pieces
+  BEFORE INSERT ON spd.pieces
   FOR EACH ROW
   WHEN ( NEW.piece_id IS NULL )
-  EXECUTE PROCEDURE egd.prefill_piece_id()
+  EXECUTE PROCEDURE spd.prefill_piece_id()
 ;
 
 
-CREATE TABLE IF NOT EXISTS egd.datasets_pieces (
-  piece_id BIGINT NOT NULL REFERENCES egd.pieces ( piece_id ) ON UPDATE CASCADE,
-  dataset_id SMALLINT NOT NULL REFERENCES egd.datasets ( dataset_id ) ON UPDATE CASCADE,
+CREATE TABLE IF NOT EXISTS spd.datasets_pieces (
+  piece_id BIGINT NOT NULL REFERENCES spd.pieces ( piece_id ) ON UPDATE CASCADE,
+  dataset_id SMALLINT NOT NULL REFERENCES spd.datasets ( dataset_id ) ON UPDATE CASCADE,
   dataset_piece_meta JSONB NOT NULL DEFAULT '{}',
   CONSTRAINT datasets_pieces_singleton UNIQUE ( piece_id, dataset_id )
 );
 
-CREATE TABLE IF NOT EXISTS egd.clients (
+CREATE TABLE IF NOT EXISTS spd.clients (
   client_id INTEGER UNIQUE NOT NULL,
-  tenant_id SMALLINT REFERENCES egd.tenants ( tenant_id ) ON UPDATE CASCADE,
+  tenant_id SMALLINT REFERENCES spd.tenants ( tenant_id ) ON UPDATE CASCADE,
   client_address TEXT UNIQUE CONSTRAINT client_valid_address CHECK ( SUBSTRING( client_address FROM 1 FOR 2 ) IN ( 'f1', 'f3', 't1', 't3' ) ),
   client_meta JSONB NOT NULL DEFAULT '{}',
   CONSTRAINT tenant_has_robust CHECK (
@@ -173,9 +173,9 @@ CREATE TABLE IF NOT EXISTS egd.clients (
     client_address IS NOT NULL
   )
 );
-CREATE INDEX IF NOT EXISTS clients_tenant_idx ON egd.clients ( tenant_id );
+CREATE INDEX IF NOT EXISTS clients_tenant_idx ON spd.clients ( tenant_id );
 
-CREATE TABLE IF NOT EXISTS egd.providers (
+CREATE TABLE IF NOT EXISTS spd.providers (
   provider_id INTEGER UNIQUE NOT NULL,
   org_id SMALLINT NOT NULL DEFAULT 0,
   city_id SMALLINT NOT NULL DEFAULT 0,
@@ -189,91 +189,91 @@ CREATE TABLE IF NOT EXISTS egd.providers (
   )
 );
 
-CREATE TABLE IF NOT EXISTS egd.providers_info (
-  provider_id INTEGER UNIQUE NOT NULL REFERENCES egd.providers ( provider_id ),
+CREATE TABLE IF NOT EXISTS spd.providers_info (
+  provider_id INTEGER UNIQUE NOT NULL REFERENCES spd.providers ( provider_id ),
   provider_last_polled TIMESTAMP WITH TIME ZONE NOT NULL,
   info_last_updated TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   info_dialing_took_msecs INTEGER,
   info_dialing_peerid TEXT,
   info JSONB NOT NULL DEFAULT '{}'
 );
-CREATE TABLE IF NOT EXISTS egd.providers_info_log (
-  provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
+CREATE TABLE IF NOT EXISTS spd.providers_info_log (
+  provider_id INTEGER NOT NULL REFERENCES spd.providers ( provider_id ),
   info_entry_created TIMESTAMP WITH TIME ZONE NOT NULL,
   info_dialing_took_msecs INTEGER,
   info_dialing_peerid TEXT,
   info JSONB NOT NULL DEFAULT '{}'
 );
 CREATE OR REPLACE
-  FUNCTION egd.record_provider_info_change() RETURNS TRIGGER
+  FUNCTION spd.record_provider_info_change() RETURNS TRIGGER
     LANGUAGE plpgsql
 AS $$
 BEGIN
-  INSERT INTO egd.providers_info_log (
+  INSERT INTO spd.providers_info_log (
     provider_id, info_entry_created, info_dialing_took_msecs, info_dialing_peerid, info
   ) VALUES(
     NEW.provider_id, NEW.provider_last_polled, NEW.info_dialing_took_msecs, NEW.info_dialing_peerid, NEW.info
   );
-  UPDATE egd.providers_info SET
+  UPDATE spd.providers_info SET
     info_last_updated = NEW.provider_last_polled
   WHERE provider_id = NEW.provider_id;
   RETURN NULL;
 END;
 $$;
 CREATE OR REPLACE TRIGGER trigger_new_provider_info
-  AFTER INSERT ON egd.providers_info
+  AFTER INSERT ON spd.providers_info
   FOR EACH ROW
-  EXECUTE PROCEDURE egd.record_provider_info_change()
+  EXECUTE PROCEDURE spd.record_provider_info_change()
 ;
 CREATE OR REPLACE TRIGGER trigger_update_provider_info
-  AFTER UPDATE ON egd.providers_info
+  AFTER UPDATE ON spd.providers_info
   FOR EACH ROW
   WHEN ( OLD.info != NEW.info )
-  EXECUTE PROCEDURE egd.record_provider_info_change()
+  EXECUTE PROCEDURE spd.record_provider_info_change()
 ;
 
 
-CREATE TABLE IF NOT EXISTS egd.tenants_providers (
-  provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
-  tenant_id SMALLINT NOT NULL REFERENCES egd.tenants ( tenant_id ) ON UPDATE CASCADE,
+CREATE TABLE IF NOT EXISTS spd.tenants_providers (
+  provider_id INTEGER NOT NULL REFERENCES spd.providers ( provider_id ),
+  tenant_id SMALLINT NOT NULL REFERENCES spd.tenants ( tenant_id ) ON UPDATE CASCADE,
   tenant_provider_meta JSONB NOT NULL DEFAULT '{}',
   CONSTRAINT tenants_providers_singleton UNIQUE ( tenant_id, provider_id )
 );
 
 
-CREATE TABLE IF NOT EXISTS egd.requests (
-  provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
+CREATE TABLE IF NOT EXISTS spd.requests (
+  provider_id INTEGER NOT NULL REFERENCES spd.providers ( provider_id ),
   request_uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
   entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   request_dump JSONB NOT NULL,
   request_meta JSONB NOT NULL DEFAULT '{}'
 );
-CREATE INDEX IF NOT EXISTS requests_entry_created ON egd.requests ( entry_created);
+CREATE INDEX IF NOT EXISTS requests_entry_created ON spd.requests ( entry_created);
 CREATE OR REPLACE
-  FUNCTION egd.init_authed_sp() RETURNS TRIGGER
+  FUNCTION spd.init_authed_sp() RETURNS TRIGGER
     LANGUAGE plpgsql
 AS $$
 BEGIN
-  INSERT INTO egd.providers( provider_id ) VALUES ( NEW.provider_id ) ON CONFLICT DO NOTHING;
+  INSERT INTO spd.providers( provider_id ) VALUES ( NEW.provider_id ) ON CONFLICT DO NOTHING;
   RETURN NEW;
 END;
 $$;
 CREATE OR REPLACE TRIGGER trigger_create_related_sp
-  BEFORE INSERT ON egd.requests
+  BEFORE INSERT ON spd.requests
   FOR EACH ROW
-  EXECUTE PROCEDURE egd.init_authed_sp()
+  EXECUTE PROCEDURE spd.init_authed_sp()
 ;
 
 
-CREATE TABLE IF NOT EXISTS egd.published_deals (
+CREATE TABLE IF NOT EXISTS spd.published_deals (
   deal_id BIGINT UNIQUE NOT NULL CONSTRAINT deal_valid_id CHECK ( deal_id > 0 ),
   piece_id BIGINT NOT NULL,
   piece_cid TEXT NOT NULL,
   claimed_log2_size BIGINT NOT NULL CONSTRAINT piece_valid_size CHECK ( claimed_log2_size > 0 ),
-  provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
-  client_id INTEGER NOT NULL REFERENCES egd.clients ( client_id ),
+  provider_id INTEGER NOT NULL REFERENCES spd.providers ( provider_id ),
+  client_id INTEGER NOT NULL REFERENCES spd.clients ( client_id ),
   label BYTEA NOT NULL,
-  decoded_label TEXT CONSTRAINT deal_valid_label_cid CHECK ( egd.valid_cid( decoded_label ) ),
+  decoded_label TEXT CONSTRAINT deal_valid_label_cid CHECK ( spd.valid_cid( decoded_label ) ),
   is_filplus BOOL NOT NULL,
   status TEXT NOT NULL,
   published_deal_meta JSONB NOT NULL DEFAULT '{}',
@@ -281,45 +281,45 @@ CREATE TABLE IF NOT EXISTS egd.published_deals (
   end_epoch INTEGER NOT NULL CONSTRAINT deal_valid_end CHECK ( end_epoch > 0 ),
   sector_start_epoch INTEGER CONSTRAINT deal_valid_sector_start CHECK ( sector_start_epoch > 0 ),
   entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  CONSTRAINT piece_id_cid_fkey FOREIGN KEY ( piece_id, piece_cid ) REFERENCES egd.pieces ( piece_id, piece_cid ) ON UPDATE CASCADE
+  CONSTRAINT piece_id_cid_fkey FOREIGN KEY ( piece_id, piece_cid ) REFERENCES spd.pieces ( piece_id, piece_cid ) ON UPDATE CASCADE
 );
-CREATE INDEX IF NOT EXISTS published_deals_piece_id_idx ON egd.published_deals ( piece_id );
-CREATE INDEX IF NOT EXISTS published_deals_status ON egd.published_deals ( status, piece_id, is_filplus, provider_id );
-CREATE INDEX IF NOT EXISTS published_deals_active ON egd.published_deals ( piece_id ) INCLUDE ( claimed_log2_size ) WHERE ( status = 'active' );
-CREATE INDEX IF NOT EXISTS published_deals_fildag ON egd.published_deals ( piece_id ) WHERE (
+CREATE INDEX IF NOT EXISTS published_deals_piece_id_idx ON spd.published_deals ( piece_id );
+CREATE INDEX IF NOT EXISTS published_deals_status ON spd.published_deals ( status, piece_id, is_filplus, provider_id );
+CREATE INDEX IF NOT EXISTS published_deals_active ON spd.published_deals ( piece_id ) INCLUDE ( claimed_log2_size ) WHERE ( status = 'active' );
+CREATE INDEX IF NOT EXISTS published_deals_fildag ON spd.published_deals ( piece_id ) WHERE (
     status = 'active'
       AND
     decoded_label IS NOT NULL
       AND
     decoded_label NOT LIKE 'baga6ea4sea%'
 );
-CREATE INDEX IF NOT EXISTS published_deals_live ON egd.published_deals ( piece_id ) WHERE ( status != 'terminated' );
+CREATE INDEX IF NOT EXISTS published_deals_live ON spd.published_deals ( piece_id ) WHERE ( status != 'terminated' );
 
 CREATE OR REPLACE
-  FUNCTION egd.init_deal_relations() RETURNS TRIGGER
+  FUNCTION spd.init_deal_relations() RETURNS TRIGGER
     LANGUAGE plpgsql
 AS $$
 BEGIN
-  INSERT INTO egd.clients( client_id ) VALUES ( NEW.client_id ) ON CONFLICT DO NOTHING;
-  INSERT INTO egd.providers( provider_id ) VALUES ( NEW.provider_id ) ON CONFLICT DO NOTHING;
+  INSERT INTO spd.clients( client_id ) VALUES ( NEW.client_id ) ON CONFLICT DO NOTHING;
+  INSERT INTO spd.providers( provider_id ) VALUES ( NEW.provider_id ) ON CONFLICT DO NOTHING;
   IF NEW.piece_id IS NULL THEN
-    INSERT INTO egd.pieces( piece_cid, piece_log2_size ) VALUES ( NEW.piece_cid, NEW.claimed_log2_size ) ON CONFLICT DO NOTHING;
-    NEW.piece_id = ( SELECT piece_id FROM egd.pieces WHERE piece_cid = NEW.piece_cid );
+    INSERT INTO spd.pieces( piece_cid, piece_log2_size ) VALUES ( NEW.piece_cid, NEW.claimed_log2_size ) ON CONFLICT DO NOTHING;
+    NEW.piece_id = ( SELECT piece_id FROM spd.pieces WHERE piece_cid = NEW.piece_cid );
   END IF;
   RETURN NEW;
  END;
 $$;
 CREATE OR REPLACE TRIGGER trigger_init_deal_relations
-  BEFORE INSERT ON egd.published_deals
+  BEFORE INSERT ON spd.published_deals
   FOR EACH ROW
-  EXECUTE PROCEDURE egd.init_deal_relations()
+  EXECUTE PROCEDURE spd.init_deal_relations()
 ;
 
-CREATE OR REPLACE VIEW egd.known_missized_deals AS (
+CREATE OR REPLACE VIEW spd.known_missized_deals AS (
   SELECT
       pd.*,
       p.piece_log2_size AS proven_log2_size
-    FROM egd.published_deals pd, egd.pieces p
+    FROM spd.published_deals pd, spd.pieces p
   WHERE
     pd.piece_id = p.piece_id
       AND
@@ -328,24 +328,24 @@ CREATE OR REPLACE VIEW egd.known_missized_deals AS (
     (p.piece_meta->'size_proven_correct')::BOOL
 );
 
-CREATE TABLE IF NOT EXISTS egd.invalidated_deals (
-  deal_id BIGINT NOT NULL UNIQUE REFERENCES egd.published_deals ( deal_id ),
+CREATE TABLE IF NOT EXISTS spd.invalidated_deals (
+  deal_id BIGINT NOT NULL UNIQUE REFERENCES spd.published_deals ( deal_id ),
   invalidation_meta JSONB NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE IF NOT EXISTS egd.proposals (
+CREATE TABLE IF NOT EXISTS spd.proposals (
   proposal_uuid UUID UNIQUE NOT NULL DEFAULT gen_random_uuid(),
   piece_id BIGINT NOT NULL,
 
   entry_created TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   signature_obtained TIMESTAMP WITH TIME ZONE,
   proposal_delivered TIMESTAMP WITH TIME ZONE,
-  activated_deal_id BIGINT UNIQUE REFERENCES egd.published_deals ( deal_id ),
+  activated_deal_id BIGINT UNIQUE REFERENCES spd.published_deals ( deal_id ),
   proposal_failstamp BIGINT NOT NULL DEFAULT 0 CONSTRAINT proposal_valid_failstamp CHECK ( proposal_failstamp >= 0 ),
   entry_last_updated TIMESTAMP WITH TIME ZONE NOT NULL,
 
-  provider_id INTEGER NOT NULL REFERENCES egd.providers ( provider_id ),
-  client_id INTEGER NOT NULL REFERENCES egd.clients ( client_id ),
+  provider_id INTEGER NOT NULL REFERENCES spd.providers ( provider_id ),
+  client_id INTEGER NOT NULL REFERENCES spd.clients ( client_id ),
 
   start_epoch INTEGER NOT NULL,
   end_epoch INTEGER NOT NULL,
@@ -354,20 +354,20 @@ CREATE TABLE IF NOT EXISTS egd.proposals (
 
   proposal_meta JSONB NOT NULL DEFAULT '{}',
 
-  CONSTRAINT proposal_piece_combo_fkey FOREIGN KEY ( piece_id, proxied_log2_size ) REFERENCES egd.pieces ( piece_id, piece_log2_size ) ON UPDATE CASCADE,
+  CONSTRAINT proposal_piece_combo_fkey FOREIGN KEY ( piece_id, proxied_log2_size ) REFERENCES spd.pieces ( piece_id, piece_log2_size ) ON UPDATE CASCADE,
   CONSTRAINT proposal_singleton_pending_piece UNIQUE ( provider_id, piece_id, proposal_failstamp ),
   CONSTRAINT proposal_annotated_failure CHECK ( (proposal_failstamp = 0) = (proposal_meta->'failure' IS NULL) )
 );
 CREATE OR REPLACE TRIGGER trigger_proposal_update_ts
-  BEFORE INSERT OR UPDATE ON egd.proposals
+  BEFORE INSERT OR UPDATE ON spd.proposals
   FOR EACH ROW
-  EXECUTE PROCEDURE egd.update_entry_timestamp()
+  EXECUTE PROCEDURE spd.update_entry_timestamp()
 ;
-CREATE INDEX IF NOT EXISTS proposals_piece_idx ON egd.proposals ( piece_id );
-CREATE INDEX IF NOT EXISTS proposals_pending ON egd.proposals ( piece_id, provider_id, client_id ) INCLUDE ( proxied_log2_size ) WHERE ( proposal_failstamp = 0 AND activated_deal_id IS NULL );
+CREATE INDEX IF NOT EXISTS proposals_piece_idx ON spd.proposals ( piece_id );
+CREATE INDEX IF NOT EXISTS proposals_pending ON spd.proposals ( piece_id, provider_id, client_id ) INCLUDE ( proxied_log2_size ) WHERE ( proposal_failstamp = 0 AND activated_deal_id IS NULL );
 
 -- Used exclusively for the `FilDAG` portion of a `Sources` response and corresponding availability matview
-CREATE OR REPLACE VIEW egd.known_fildag_deals_ranked AS (
+CREATE OR REPLACE VIEW spd.known_fildag_deals_ranked AS (
   SELECT
       piece_id,
       deal_id,
@@ -382,8 +382,8 @@ CREATE OR REPLACE VIEW egd.known_fildag_deals_ranked AS (
           end_epoch DESC,
           deal_id
       ) ) AS rank
-    FROM egd.published_deals pd
-    LEFT JOIN egd.invalidated_deals USING ( deal_id )
+    FROM spd.published_deals pd
+    LEFT JOIN spd.invalidated_deals USING ( deal_id )
   WHERE
     invalidated_deals.deal_id IS NULL
       AND
@@ -394,7 +394,7 @@ CREATE OR REPLACE VIEW egd.known_fildag_deals_ranked AS (
     decoded_label NOT LIKE 'baga6ea4sea%'
 );
 
-CREATE OR REPLACE VIEW egd.clients_datacap_available AS
+CREATE OR REPLACE VIEW spd.clients_datacap_available AS
   SELECT
     c.client_id,
     c.client_address,
@@ -408,7 +408,7 @@ CREATE OR REPLACE VIEW egd.clients_datacap_available AS
       COALESCE(
         (
         SELECT SUM( 1::BIGINT << pr.proxied_log2_size )
-          FROM egd.proposals pr
+          FROM spd.proposals pr
         WHERE
           pr.proposal_failstamp = 0
             AND
@@ -419,17 +419,17 @@ CREATE OR REPLACE VIEW egd.clients_datacap_available AS
         0
       )
     ) AS datacap_available
-  FROM egd.clients c
+  FROM spd.clients c
   WHERE c.tenant_id IS NOT NULL
   ORDER BY c.tenant_id, datacap_available DESC
 ;
 
 -- backing virtually all of the functions/materialized views below
 -- FIXME: for now it must be a live view as it backs piece_realtime_eligibility(), separate live and tracked parts
-CREATE OR REPLACE VIEW egd.known_deals_ranked AS (
+CREATE OR REPLACE VIEW spd.known_deals_ranked AS (
   WITH
     cutoff AS MATERIALIZED (
-      SELECT egd.replica_expiration_cutoff_epoch() AS epoch
+      SELECT spd.replica_expiration_cutoff_epoch() AS epoch
     )
   SELECT
       intra_sp_rank,
@@ -469,8 +469,8 @@ CREATE OR REPLACE VIEW egd.known_deals_ranked AS (
               ( CASE WHEN pd.status = 'active' THEN 4::"char" ELSE 3::"char" END ) AS state,
               pd.is_filplus,
               pd.decoded_label AS proposal_label
-            FROM egd.published_deals pd
-            LEFT JOIN egd.invalidated_deals USING ( deal_id )
+            FROM spd.published_deals pd
+            LEFT JOIN spd.invalidated_deals USING ( deal_id )
           WHERE
             invalidated_deals.deal_id IS NULL
               AND
@@ -489,9 +489,9 @@ CREATE OR REPLACE VIEW egd.known_deals_ranked AS (
               ( CASE WHEN pr.proposal_delivered IS NOT NULL THEN 2::"char" ELSE 1::"char" END ) AS state, -- proposed / accepted but not yet chain-published
               true AS is_filplus, -- we do not propose non-filplus
               p.proposal_label
-            FROM egd.proposals pr
-            JOIN egd.pieces p USING ( piece_id )
-            LEFT JOIN egd.published_deals pd
+            FROM spd.proposals pr
+            JOIN spd.pieces p USING ( piece_id )
+            LEFT JOIN spd.published_deals pd
               ON
                 pd.piece_id = pr.piece_id
                   AND
@@ -509,7 +509,7 @@ CREATE OR REPLACE VIEW egd.known_deals_ranked AS (
               AND
             pr.activated_deal_id IS NULL
         )
-      ) pub_and_prop, egd.clients c, cutoff
+      ) pub_and_prop, spd.clients c, cutoff
     WHERE
       pub_and_prop.client_id = c.client_id
   ) fin
@@ -517,31 +517,31 @@ CREATE OR REPLACE VIEW egd.known_deals_ranked AS (
 
 BEGIN;
 
-DROP FUNCTION IF EXISTS egd.pieces_eligible_head;
-DROP FUNCTION IF EXISTS egd.pieces_eligible_full;
-DROP FUNCTION IF EXISTS egd.piece_realtime_eligibility;
+DROP FUNCTION IF EXISTS spd.pieces_eligible_head;
+DROP FUNCTION IF EXISTS spd.pieces_eligible_full;
+DROP FUNCTION IF EXISTS spd.piece_realtime_eligibility;
 
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_pieces_availability;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_pieces_availability;
 
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_overreplicated_total;
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_overreplicated_org;
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_overreplicated_city;
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_overreplicated_country;
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_overreplicated_continent;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_overreplicated_total;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_overreplicated_org;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_overreplicated_city;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_overreplicated_country;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_overreplicated_continent;
 
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_replicas_org;
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_replicas_city;
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_replicas_country;
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_replicas_continent;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_replicas_org;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_replicas_city;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_replicas_country;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_replicas_continent;
 
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_deals_prefiltered_for_repcount;
-DROP MATERIALIZED VIEW IF EXISTS egd.mv_orglocal_presence;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_deals_prefiltered_for_repcount;
+DROP MATERIALIZED VIEW IF EXISTS spd.mv_orglocal_presence;
 
 \timing
 ;
 
 -- Used exclusively by the 3 functions
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_pieces_availability WITH ( toast_tuple_target = 8160 ) AS (
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_pieces_availability WITH ( toast_tuple_target = 8160 ) AS (
   SELECT
       ROW_NUMBER() OVER(
         -- MASTER SORT LIVES HERE
@@ -559,16 +559,16 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_pieces_availability WITH ( toast_t
           SELECT
               dp.piece_id,
               ARRAY_AGG( DISTINCT( td.tenant_id ) ) AS potential_tenant_ids
-            FROM egd.datasets_pieces dp
-            JOIN egd.tenants_datasets td USING ( dataset_id )
+            FROM spd.datasets_pieces dp
+            JOIN spd.tenants_datasets td USING ( dataset_id )
           GROUP BY dp.piece_id
         )
       SELECT
           p.piece_id,
           (
             SELECT
-                egd.coarse_epoch( MAX( kfdr.end_epoch ) )
-              FROM egd.known_fildag_deals_ranked kfdr
+                spd.coarse_epoch( MAX( kfdr.end_epoch ) )
+              FROM spd.known_fildag_deals_ranked kfdr
               WHERE
                 kfdr.piece_id = p.piece_id
           ) AS coarse_latest_active_end_epoch,
@@ -579,20 +579,20 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_pieces_availability WITH ( toast_t
           p.proposal_label,
           poi.potential_tenant_ids
         FROM pieces_of_interest poi
-        JOIN egd.pieces p USING ( piece_id )
+        JOIN spd.pieces p USING ( piece_id )
     ) s
 ) WITH NO DATA;
-ALTER MATERIALIZED VIEW egd.mv_pieces_availability ALTER COLUMN piece_cid SET STORAGE MAIN;
-ALTER MATERIALIZED VIEW egd.mv_pieces_availability ALTER COLUMN potential_tenant_ids SET STORAGE MAIN;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_pieces_availability_key ON egd.mv_pieces_availability ( piece_id );
-CREATE INDEX IF NOT EXISTS mv_pieces_availability_standard_sector ON egd.mv_pieces_availability ( piece_id ) WHERE ( NOT requires_64g_sector );
-CREATE INDEX IF NOT EXISTS mv_pieces_availability_order ON egd.mv_pieces_availability ( display_sort ) INCLUDE ( piece_id );
-CREATE INDEX IF NOT EXISTS mv_pieces_availability_has_sources ON egd.mv_pieces_availability ( piece_id ) WHERE ( has_sources = true );
-REFRESH MATERIALIZED VIEW egd.mv_pieces_availability;
-ANALYZE egd.mv_pieces_availability;
+ALTER MATERIALIZED VIEW spd.mv_pieces_availability ALTER COLUMN piece_cid SET STORAGE MAIN;
+ALTER MATERIALIZED VIEW spd.mv_pieces_availability ALTER COLUMN potential_tenant_ids SET STORAGE MAIN;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_pieces_availability_key ON spd.mv_pieces_availability ( piece_id );
+CREATE INDEX IF NOT EXISTS mv_pieces_availability_standard_sector ON spd.mv_pieces_availability ( piece_id ) WHERE ( NOT requires_64g_sector );
+CREATE INDEX IF NOT EXISTS mv_pieces_availability_order ON spd.mv_pieces_availability ( display_sort ) INCLUDE ( piece_id );
+CREATE INDEX IF NOT EXISTS mv_pieces_availability_has_sources ON spd.mv_pieces_availability ( piece_id ) WHERE ( has_sources = true );
+REFRESH MATERIALIZED VIEW spd.mv_pieces_availability;
+ANALYZE spd.mv_pieces_availability;
 
 CREATE OR REPLACE
-  FUNCTION egd.piece_realtime_eligibility(
+  FUNCTION spd.piece_realtime_eligibility(
     arg_calling_provider_id INTEGER,
     arg_piece_cid TEXT
   ) RETURNS TABLE (
@@ -638,14 +638,14 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
       SELECT
           p.piece_id,
           ( 1::BIGINT << p.piece_log2_size ) AS piece_size_bytes,
-          egd.replica_expiration_cutoff_epoch() AS replica_expiration_cutoff_epoch,
+          spd.replica_expiration_cutoff_epoch() AS replica_expiration_cutoff_epoch,
           sp.provider_id,
           sp.org_id,
           sp.city_id,
           sp.country_id,
           sp.continent_id,
           p.proposal_label
-        FROM egd.pieces p, egd.providers sp
+        FROM spd.pieces p, spd.providers sp
       WHERE
         p.piece_cid = arg_piece_cid
           AND
@@ -656,7 +656,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           cda.tenant_id,
           cda.client_id,
           cda.client_address
-        FROM egd.clients_datacap_available cda, ctx
+        FROM spd.clients_datacap_available cda, ctx
       WHERE
         cda.datacap_available >= ctx.piece_size_bytes
       ORDER BY cda.tenant_id, cda.datacap_available
@@ -665,7 +665,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
       SELECT
           (
             SELECT SUM( datacap_available )
-              FROM egd.clients_datacap_available cda
+              FROM spd.clients_datacap_available cda
             WHERE cda.tenant_id = t.tenant_id
           ) AS tenant_datacap_available,
 
@@ -675,7 +675,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           COALESCE(
             (
               SELECT SUM( 1::BIGINT << pr.proxied_log2_size )
-                FROM ctx, egd.proposals pr
+                FROM ctx, spd.proposals pr
               WHERE
                 pr.provider_id = ctx.provider_id
                   AND
@@ -683,7 +683,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
                   AND
                 pr.activated_deal_id IS NULL
                   AND
-                pr.client_id IN ( SELECT client_id FROM egd.clients c WHERE c.tenant_id = t.tenant_id )
+                pr.client_id IN ( SELECT client_id FROM spd.clients c WHERE c.tenant_id = t.tenant_id )
             )::BIGINT,
             0::BIGINT
           ) AS cur_in_flight_bytes,
@@ -705,15 +705,15 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
           t.tenant_meta
         FROM ctx
-        JOIN egd.tenants_providers tp USING ( provider_id )
-        JOIN egd.tenants t USING ( tenant_id )
+        JOIN spd.tenants_providers tp USING ( provider_id )
+        JOIN spd.tenants t USING ( tenant_id )
         LEFT JOIN tenant_addresses ta USING ( tenant_id )
       WHERE
         NOT COALESCE( ( tp.tenant_provider_meta->'inactivated' )::BOOL, false )
           AND
         t.tenant_id IN (
           SELECT UNNEST( pa.potential_tenant_ids )
-            FROM egd.mv_pieces_availability pa
+            FROM spd.mv_pieces_availability pa
           WHERE pa.piece_id = ctx.piece_id
         )
     ),
@@ -734,8 +734,8 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
           (
             SELECT MAX( start_epoch )
-              FROM egd.proposals pr
-              JOIN egd.clients c USING ( client_id )
+              FROM spd.proposals pr
+              JOIN spd.clients c USING ( client_id )
             WHERE
               pr.piece_id = ctx.piece_id
                 AND
@@ -746,7 +746,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
           EXISTS (
             SELECT 42
-              FROM egd.known_deals_ranked kdr
+              FROM spd.known_deals_ranked kdr
             WHERE
               kdr.piece_id = ctx.piece_id
                 AND
@@ -765,7 +765,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           at.max_total_replicas AS max_total,
           (
             SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
-              FROM egd.known_deals_ranked kdr
+              FROM spd.known_deals_ranked kdr
             WHERE
               kdr.piece_id = ctx.piece_id
                 AND
@@ -787,7 +787,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           at.max_per_${_},
           (
             SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
-              FROM egd.known_deals_ranked kdr, egd.providers p
+              FROM spd.known_deals_ranked kdr, spd.providers p
             WHERE
               kdr.piece_id = ctx.piece_id
                 AND
@@ -812,7 +812,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           at.max_per_org,
           (
             SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
-              FROM egd.known_deals_ranked kdr, egd.providers p
+              FROM spd.known_deals_ranked kdr, spd.providers p
             WHERE
               kdr.piece_id = ctx.piece_id
                 AND
@@ -830,7 +830,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           at.max_per_city,
           (
             SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
-              FROM egd.known_deals_ranked kdr, egd.providers p
+              FROM spd.known_deals_ranked kdr, spd.providers p
             WHERE
               kdr.piece_id = ctx.piece_id
                 AND
@@ -848,7 +848,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           at.max_per_country,
           (
             SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
-              FROM egd.known_deals_ranked kdr, egd.providers p
+              FROM spd.known_deals_ranked kdr, spd.providers p
             WHERE
               kdr.piece_id = ctx.piece_id
                 AND
@@ -866,7 +866,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           at.max_per_continent,
           (
             SELECT COUNT(DISTINCT( kdr.provider_id ))::SMALLINT
-              FROM egd.known_deals_ranked kdr, egd.providers p
+              FROM spd.known_deals_ranked kdr, spd.providers p
             WHERE
               kdr.piece_id = ctx.piece_id
                 AND
@@ -897,7 +897,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
       tenant_exclusive,
       deal_duration_days, start_within_hours,
       deal_already_exists,
-      CASE WHEN previous_start_epoch > egd.proposal_deduplication_recent_cutoff_epoch()
+      CASE WHEN previous_start_epoch > spd.proposal_deduplication_recent_cutoff_epoch()
         THEN previous_start_epoch
         ELSE NULL::INTEGER
       END AS recently_used_start_epoch,
@@ -934,10 +934,10 @@ $$;
 
 
 -- internal materialization, not used by the app directly
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_deals_prefiltered_for_repcount AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_deals_prefiltered_for_repcount AS
   WITH
     cutoff AS MATERIALIZED (
-      SELECT egd.replica_expiration_cutoff_epoch() AS epoch
+      SELECT spd.replica_expiration_cutoff_epoch() AS epoch
     ),
     filtered AS (
       SELECT
@@ -945,12 +945,12 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_deals_prefiltered_for_repcount AS
           kdr.provider_id,
           kdr.is_filplus,
           kdr.claimant_ids
-        FROM egd.known_deals_ranked kdr, cutoff
+        FROM spd.known_deals_ranked kdr, cutoff
       WHERE
         kdr.piece_id IN (  -- restrict to only pieces we care about
           SELECT dp.piece_id
-            FROM egd.datasets_pieces dp
-            JOIN egd.tenants_datasets td USING ( dataset_id )
+            FROM spd.datasets_pieces dp
+            JOIN spd.tenants_datasets td USING ( dataset_id )
         )
           AND
         kdr.end_epoch >= cutoff.epoch
@@ -979,8 +979,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_deals_prefiltered_for_repcount AS
   )
   ORDER BY provider_id, claimant_id, piece_id, is_filplus
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_deals_prefiltered_for_repcount_key ON egd.mv_deals_prefiltered_for_repcount ( provider_id, claimant_id, piece_id, is_filplus );
-ANALYZE egd.mv_deals_prefiltered_for_repcount;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_deals_prefiltered_for_repcount_key ON spd.mv_deals_prefiltered_for_repcount ( provider_id, claimant_id, piece_id, is_filplus );
+ANALYZE spd.mv_deals_prefiltered_for_repcount;
 
 -- next 2*4 are generated from a template
 -- the continent one doubles as a `totals` table, with continent_id being NULL
@@ -991,7 +991,7 @@ perl -E '
   say join "\n",
 
     ( map { "
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_${_} AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_replicas_${_} AS
   (
     (
       SELECT
@@ -1000,8 +1000,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_${_} AS
           ${_}_id,
           ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
           ( COUNT(*) )::SMALLINT AS replicas_any
-        FROM egd.mv_deals_prefiltered_for_repcount
-        JOIN egd.providers USING ( provider_id )
+        FROM spd.mv_deals_prefiltered_for_repcount
+        JOIN spd.providers USING ( provider_id )
       WHERE claimant_id != 0
       GROUP BY
         piece_id, ${_}_id, claimant_id
@@ -1014,8 +1014,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_${_} AS
           ${_}_id,
           ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
           ( COUNT(*) )::SMALLINT AS replicas_any
-        FROM egd.mv_deals_prefiltered_for_repcount
-        JOIN egd.providers USING ( provider_id )
+        FROM spd.mv_deals_prefiltered_for_repcount
+        JOIN spd.providers USING ( provider_id )
       WHERE claimant_id = 0
       GROUP BY GROUPING SETS (
         @{[ ( $_ eq q{continent} ) ? q{( piece_id ),} : q{} ]}
@@ -1024,18 +1024,18 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_${_} AS
     )
   ) ORDER BY piece_id, ${_}_id, claimant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_${_}_idx ON egd.mv_replicas_${_} ( piece_id, ${_}_id, claimant_id );
-ANALYZE egd.mv_replicas_${_};
+CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_${_}_idx ON spd.mv_replicas_${_} ( piece_id, ${_}_id, claimant_id );
+ANALYZE spd.mv_replicas_${_};
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_${_} AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_overreplicated_${_} AS
   SELECT DISTINCT
       r.piece_id,
       t.tenant_id,
       r.${_}_id
-    FROM egd.mv_replicas_${_} r
-    JOIN egd.datasets_pieces USING ( piece_id )
-    JOIN egd.tenants_datasets USING ( dataset_id )
-    JOIN egd.tenants t USING ( tenant_id )
+    FROM spd.mv_replicas_${_} r
+    JOIN spd.datasets_pieces USING ( piece_id )
+    JOIN spd.tenants_datasets USING ( dataset_id )
+    JOIN spd.tenants t USING ( tenant_id )
   WHERE
     r.${_}_id > 0
 
@@ -1072,8 +1072,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_${_} AS
     )
   ORDER BY piece_id, ${_}_id, tenant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_${_}_idx ON egd.mv_overreplicated_${_} ( piece_id, ${_}_id, tenant_id );
-ANALYZE egd.mv_overreplicated_${_};
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_${_}_idx ON spd.mv_overreplicated_${_} ( piece_id, ${_}_id, tenant_id );
+ANALYZE spd.mv_overreplicated_${_};
 " }
   @spatial_types )
 
@@ -1083,7 +1083,7 @@ ANALYZE egd.mv_overreplicated_${_};
 
 -- BEGIN SQLGEN
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_continent AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_replicas_continent AS
   (
     (
       SELECT
@@ -1092,8 +1092,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_continent AS
           continent_id,
           ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
           ( COUNT(*) )::SMALLINT AS replicas_any
-        FROM egd.mv_deals_prefiltered_for_repcount
-        JOIN egd.providers USING ( provider_id )
+        FROM spd.mv_deals_prefiltered_for_repcount
+        JOIN spd.providers USING ( provider_id )
       WHERE claimant_id != 0
       GROUP BY
         piece_id, continent_id, claimant_id
@@ -1106,8 +1106,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_continent AS
           continent_id,
           ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
           ( COUNT(*) )::SMALLINT AS replicas_any
-        FROM egd.mv_deals_prefiltered_for_repcount
-        JOIN egd.providers USING ( provider_id )
+        FROM spd.mv_deals_prefiltered_for_repcount
+        JOIN spd.providers USING ( provider_id )
       WHERE claimant_id = 0
       GROUP BY GROUPING SETS (
         ( piece_id ),
@@ -1116,18 +1116,18 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_continent AS
     )
   ) ORDER BY piece_id, continent_id, claimant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_continent_idx ON egd.mv_replicas_continent ( piece_id, continent_id, claimant_id );
-ANALYZE egd.mv_replicas_continent;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_continent_idx ON spd.mv_replicas_continent ( piece_id, continent_id, claimant_id );
+ANALYZE spd.mv_replicas_continent;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_continent AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_overreplicated_continent AS
   SELECT DISTINCT
       r.piece_id,
       t.tenant_id,
       r.continent_id
-    FROM egd.mv_replicas_continent r
-    JOIN egd.datasets_pieces USING ( piece_id )
-    JOIN egd.tenants_datasets USING ( dataset_id )
-    JOIN egd.tenants t USING ( tenant_id )
+    FROM spd.mv_replicas_continent r
+    JOIN spd.datasets_pieces USING ( piece_id )
+    JOIN spd.tenants_datasets USING ( dataset_id )
+    JOIN spd.tenants t USING ( tenant_id )
   WHERE
     r.continent_id > 0
 
@@ -1164,11 +1164,11 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_continent AS
     )
   ORDER BY piece_id, continent_id, tenant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_continent_idx ON egd.mv_overreplicated_continent ( piece_id, continent_id, tenant_id );
-ANALYZE egd.mv_overreplicated_continent;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_continent_idx ON spd.mv_overreplicated_continent ( piece_id, continent_id, tenant_id );
+ANALYZE spd.mv_overreplicated_continent;
 
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_country AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_replicas_country AS
   (
     (
       SELECT
@@ -1177,8 +1177,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_country AS
           country_id,
           ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
           ( COUNT(*) )::SMALLINT AS replicas_any
-        FROM egd.mv_deals_prefiltered_for_repcount
-        JOIN egd.providers USING ( provider_id )
+        FROM spd.mv_deals_prefiltered_for_repcount
+        JOIN spd.providers USING ( provider_id )
       WHERE claimant_id != 0
       GROUP BY
         piece_id, country_id, claimant_id
@@ -1191,8 +1191,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_country AS
           country_id,
           ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
           ( COUNT(*) )::SMALLINT AS replicas_any
-        FROM egd.mv_deals_prefiltered_for_repcount
-        JOIN egd.providers USING ( provider_id )
+        FROM spd.mv_deals_prefiltered_for_repcount
+        JOIN spd.providers USING ( provider_id )
       WHERE claimant_id = 0
       GROUP BY GROUPING SETS (
 
@@ -1201,18 +1201,18 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_country AS
     )
   ) ORDER BY piece_id, country_id, claimant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_country_idx ON egd.mv_replicas_country ( piece_id, country_id, claimant_id );
-ANALYZE egd.mv_replicas_country;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_country_idx ON spd.mv_replicas_country ( piece_id, country_id, claimant_id );
+ANALYZE spd.mv_replicas_country;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_country AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_overreplicated_country AS
   SELECT DISTINCT
       r.piece_id,
       t.tenant_id,
       r.country_id
-    FROM egd.mv_replicas_country r
-    JOIN egd.datasets_pieces USING ( piece_id )
-    JOIN egd.tenants_datasets USING ( dataset_id )
-    JOIN egd.tenants t USING ( tenant_id )
+    FROM spd.mv_replicas_country r
+    JOIN spd.datasets_pieces USING ( piece_id )
+    JOIN spd.tenants_datasets USING ( dataset_id )
+    JOIN spd.tenants t USING ( tenant_id )
   WHERE
     r.country_id > 0
 
@@ -1249,11 +1249,11 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_country AS
     )
   ORDER BY piece_id, country_id, tenant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_country_idx ON egd.mv_overreplicated_country ( piece_id, country_id, tenant_id );
-ANALYZE egd.mv_overreplicated_country;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_country_idx ON spd.mv_overreplicated_country ( piece_id, country_id, tenant_id );
+ANALYZE spd.mv_overreplicated_country;
 
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_city AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_replicas_city AS
   (
     (
       SELECT
@@ -1262,8 +1262,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_city AS
           city_id,
           ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
           ( COUNT(*) )::SMALLINT AS replicas_any
-        FROM egd.mv_deals_prefiltered_for_repcount
-        JOIN egd.providers USING ( provider_id )
+        FROM spd.mv_deals_prefiltered_for_repcount
+        JOIN spd.providers USING ( provider_id )
       WHERE claimant_id != 0
       GROUP BY
         piece_id, city_id, claimant_id
@@ -1276,8 +1276,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_city AS
           city_id,
           ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
           ( COUNT(*) )::SMALLINT AS replicas_any
-        FROM egd.mv_deals_prefiltered_for_repcount
-        JOIN egd.providers USING ( provider_id )
+        FROM spd.mv_deals_prefiltered_for_repcount
+        JOIN spd.providers USING ( provider_id )
       WHERE claimant_id = 0
       GROUP BY GROUPING SETS (
 
@@ -1286,18 +1286,18 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_city AS
     )
   ) ORDER BY piece_id, city_id, claimant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_city_idx ON egd.mv_replicas_city ( piece_id, city_id, claimant_id );
-ANALYZE egd.mv_replicas_city;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_city_idx ON spd.mv_replicas_city ( piece_id, city_id, claimant_id );
+ANALYZE spd.mv_replicas_city;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_city AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_overreplicated_city AS
   SELECT DISTINCT
       r.piece_id,
       t.tenant_id,
       r.city_id
-    FROM egd.mv_replicas_city r
-    JOIN egd.datasets_pieces USING ( piece_id )
-    JOIN egd.tenants_datasets USING ( dataset_id )
-    JOIN egd.tenants t USING ( tenant_id )
+    FROM spd.mv_replicas_city r
+    JOIN spd.datasets_pieces USING ( piece_id )
+    JOIN spd.tenants_datasets USING ( dataset_id )
+    JOIN spd.tenants t USING ( tenant_id )
   WHERE
     r.city_id > 0
 
@@ -1334,11 +1334,11 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_city AS
     )
   ORDER BY piece_id, city_id, tenant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_city_idx ON egd.mv_overreplicated_city ( piece_id, city_id, tenant_id );
-ANALYZE egd.mv_overreplicated_city;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_city_idx ON spd.mv_overreplicated_city ( piece_id, city_id, tenant_id );
+ANALYZE spd.mv_overreplicated_city;
 
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_org AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_replicas_org AS
   (
     (
       SELECT
@@ -1347,8 +1347,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_org AS
           org_id,
           ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
           ( COUNT(*) )::SMALLINT AS replicas_any
-        FROM egd.mv_deals_prefiltered_for_repcount
-        JOIN egd.providers USING ( provider_id )
+        FROM spd.mv_deals_prefiltered_for_repcount
+        JOIN spd.providers USING ( provider_id )
       WHERE claimant_id != 0
       GROUP BY
         piece_id, org_id, claimant_id
@@ -1361,8 +1361,8 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_org AS
           org_id,
           ( COUNT(*) FILTER ( WHERE is_filplus ) )::SMALLINT AS replicas_filplus,
           ( COUNT(*) )::SMALLINT AS replicas_any
-        FROM egd.mv_deals_prefiltered_for_repcount
-        JOIN egd.providers USING ( provider_id )
+        FROM spd.mv_deals_prefiltered_for_repcount
+        JOIN spd.providers USING ( provider_id )
       WHERE claimant_id = 0
       GROUP BY GROUPING SETS (
 
@@ -1371,18 +1371,18 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_replicas_org AS
     )
   ) ORDER BY piece_id, org_id, claimant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_org_idx ON egd.mv_replicas_org ( piece_id, org_id, claimant_id );
-ANALYZE egd.mv_replicas_org;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_replicas_org_idx ON spd.mv_replicas_org ( piece_id, org_id, claimant_id );
+ANALYZE spd.mv_replicas_org;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_org AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_overreplicated_org AS
   SELECT DISTINCT
       r.piece_id,
       t.tenant_id,
       r.org_id
-    FROM egd.mv_replicas_org r
-    JOIN egd.datasets_pieces USING ( piece_id )
-    JOIN egd.tenants_datasets USING ( dataset_id )
-    JOIN egd.tenants t USING ( tenant_id )
+    FROM spd.mv_replicas_org r
+    JOIN spd.datasets_pieces USING ( piece_id )
+    JOIN spd.tenants_datasets USING ( dataset_id )
+    JOIN spd.tenants t USING ( tenant_id )
   WHERE
     r.org_id > 0
 
@@ -1419,20 +1419,20 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_org AS
     )
   ORDER BY piece_id, org_id, tenant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_org_idx ON egd.mv_overreplicated_org ( piece_id, org_id, tenant_id );
-ANALYZE egd.mv_overreplicated_org;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_org_idx ON spd.mv_overreplicated_org ( piece_id, org_id, tenant_id );
+ANALYZE spd.mv_overreplicated_org;
 
 -- END SQLGEN
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_total AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_overreplicated_total AS
 
   SELECT DISTINCT
       r.piece_id,
       t.tenant_id
-    FROM egd.mv_replicas_continent r
-    JOIN egd.datasets_pieces USING ( piece_id )
-    JOIN egd.tenants_datasets USING ( dataset_id )
-    JOIN egd.tenants t USING ( tenant_id )
+    FROM spd.mv_replicas_continent r
+    JOIN spd.datasets_pieces USING ( piece_id )
+    JOIN spd.tenants_datasets USING ( dataset_id )
+    JOIN spd.tenants t USING ( tenant_id )
   WHERE
 
     r.continent_id IS NULL
@@ -1470,19 +1470,19 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_overreplicated_total AS
     )
   ORDER BY piece_id, tenant_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_total_idx ON egd.mv_overreplicated_total ( piece_id, tenant_id );
-ANALYZE egd.mv_overreplicated_total;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_overreplicated_total_idx ON spd.mv_overreplicated_total ( piece_id, tenant_id );
+ANALYZE spd.mv_overreplicated_total;
 
 
 -- enable the orglocal variant below
 -- this is *distinct* from mv_replicas_org: it lists deals in any live state on chain
-CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_orglocal_presence AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS spd.mv_orglocal_presence AS
   SELECT DISTINCT
       pd.piece_id,
       p.org_id
-    FROM egd.published_deals pd
-    JOIN egd.providers p USING ( provider_id )
-    LEFT JOIN egd.invalidated_deals id USING ( deal_id )
+    FROM spd.published_deals pd
+    JOIN spd.providers p USING ( provider_id )
+    LEFT JOIN spd.invalidated_deals id USING ( deal_id )
   WHERE
     p.org_id != 0
       AND
@@ -1491,14 +1491,14 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS egd.mv_orglocal_presence AS
     id.deal_id IS NULL
   ORDER BY pd.piece_id, p.org_id
 ;
-CREATE UNIQUE INDEX IF NOT EXISTS mv_orglocal_presence_key ON egd.mv_orglocal_presence ( piece_id, org_id );
-ANALYZE egd.mv_orglocal_presence;
+CREATE UNIQUE INDEX IF NOT EXISTS mv_orglocal_presence_key ON spd.mv_orglocal_presence ( piece_id, org_id );
+ANALYZE spd.mv_orglocal_presence;
 
 
 /*
 Templated function in 2 variants:
-- egd.pieces_eligible_head(...) Inline (lateral) overreplication-evaluator, allows for linear-slowdown LIMIT
-- egd.pieces_eligible_full(...) Pre-calculated overreplication-evaluator, steep up-front cost, sublinear-slowdown LIMIT on larger set
+- spd.pieces_eligible_head(...) Inline (lateral) overreplication-evaluator, allows for linear-slowdown LIMIT
+- spd.pieces_eligible_full(...) Pre-calculated overreplication-evaluator, steep up-front cost, sublinear-slowdown LIMIT on larger set
 
 Regenerate via:
 
@@ -1512,7 +1512,7 @@ perl -E '
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_total o_total
+            FROM spd.mv_overreplicated_total o_total
           WHERE
             o_total.piece_id = pa.piece_id
               AND
@@ -1527,7 +1527,7 @@ perl -E '
         \"
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_${_} o_${_}
+            FROM spd.mv_overreplicated_${_} o_${_}
           WHERE
             o_${_}.piece_id = pa.piece_id
               AND
@@ -1580,7 +1580,7 @@ $no_overrep_cond
       SELECT
           piece_id,
           ARRAY_AGG( et.tenant_id ) AS tenant_ids
-        FROM egd.mv_pieces_availability pa, sp, enabled_tenants et
+        FROM spd.mv_pieces_availability pa, sp, enabled_tenants et
 
       WHERE
         $no_overrep_cond
@@ -1592,7 +1592,7 @@ $no_overrep_cond
   say join "\n", map {
     "
 CREATE OR REPLACE
-  FUNCTION egd.pieces_eligible_${_}(
+  FUNCTION spd.pieces_eligible_${_}(
     arg_calling_provider_id INTEGER,
     arg_limit INTEGER,
     arg_only_tenant_id SMALLINT, -- use 0 for ~any~
@@ -1616,14 +1616,14 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS \$\$
           sp.country_id,
           sp.continent_id,
           ( COALESCE( (spi.info->\x{27}sector_log2_size\x{27})::BIGINT, 0 ) >= 36 ) AS can_seal_64g_sectors
-        FROM egd.providers sp
-        LEFT JOIN egd.providers_info spi USING ( provider_id )
+        FROM spd.providers sp
+        LEFT JOIN spd.providers_info spi USING ( provider_id )
       WHERE
         sp.provider_id = arg_calling_provider_id
     ),
     enabled_tenants AS MATERIALIZED (
       SELECT tp.tenant_id
-        FROM egd.tenants_providers tp
+        FROM spd.tenants_providers tp
       WHERE
         tp.provider_id = arg_calling_provider_id
           AND
@@ -1640,7 +1640,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS \$\$
       ( pa.coarse_latest_active_end_epoch IS NOT NULL ) AS has_sources_fil_active,
       pa.piece_cid,
       claiming_tenants.tenant_ids
-    FROM egd.mv_pieces_availability pa, sp $parts->{$_}{FROM}
+    FROM spd.mv_pieces_availability pa, sp $parts->{$_}{FROM}
 
   WHERE $parts->{$_}{COND}
       AND
@@ -1672,7 +1672,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS \$\$
         OR
       EXISTS (
         SELECT 42
-          FROM egd.mv_orglocal_presence op
+          FROM spd.mv_orglocal_presence op
         WHERE
           op.piece_id = pa.piece_id
             AND
@@ -1686,7 +1686,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS \$\$
     -- exclude my own known/in-flight
     NOT EXISTS (
       SELECT 42
-        FROM egd.mv_deals_prefiltered_for_repcount dpfr
+        FROM spd.mv_deals_prefiltered_for_repcount dpfr
       WHERE
         dpfr.piece_id = pa.piece_id
           AND
@@ -1699,7 +1699,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS \$\$
     -- exclude my own pre-flight
     NOT EXISTS (
       SELECT 42
-        FROM egd.proposals pr
+        FROM spd.proposals pr
       WHERE
         pr.piece_id = pa.piece_id
           AND
@@ -1724,7 +1724,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS \$\$
 -- BEGIN SQLGEN
 
 CREATE OR REPLACE
-  FUNCTION egd.pieces_eligible_head(
+  FUNCTION spd.pieces_eligible_head(
     arg_calling_provider_id INTEGER,
     arg_limit INTEGER,
     arg_only_tenant_id SMALLINT, -- use 0 for ~any~
@@ -1748,14 +1748,14 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           sp.country_id,
           sp.continent_id,
           ( COALESCE( (spi.info->'sector_log2_size')::BIGINT, 0 ) >= 36 ) AS can_seal_64g_sectors
-        FROM egd.providers sp
-        LEFT JOIN egd.providers_info spi USING ( provider_id )
+        FROM spd.providers sp
+        LEFT JOIN spd.providers_info spi USING ( provider_id )
       WHERE
         sp.provider_id = arg_calling_provider_id
     ),
     enabled_tenants AS MATERIALIZED (
       SELECT tp.tenant_id
-        FROM egd.tenants_providers tp
+        FROM spd.tenants_providers tp
       WHERE
         tp.provider_id = arg_calling_provider_id
           AND
@@ -1772,7 +1772,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
       ( pa.coarse_latest_active_end_epoch IS NOT NULL ) AS has_sources_fil_active,
       pa.piece_cid,
       claiming_tenants.tenant_ids
-    FROM egd.mv_pieces_availability pa, sp , LATERAL (
+    FROM spd.mv_pieces_availability pa, sp , LATERAL (
       SELECT
           ARRAY_AGG( et.tenant_id ) AS tenant_ids
         FROM enabled_tenants et
@@ -1786,7 +1786,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_total o_total
+            FROM spd.mv_overreplicated_total o_total
           WHERE
             o_total.piece_id = pa.piece_id
               AND
@@ -1798,7 +1798,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_org o_org
+            FROM spd.mv_overreplicated_org o_org
           WHERE
             o_org.piece_id = pa.piece_id
               AND
@@ -1811,7 +1811,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_city o_city
+            FROM spd.mv_overreplicated_city o_city
           WHERE
             o_city.piece_id = pa.piece_id
               AND
@@ -1824,7 +1824,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_country o_country
+            FROM spd.mv_overreplicated_country o_country
           WHERE
             o_country.piece_id = pa.piece_id
               AND
@@ -1837,7 +1837,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_continent o_continent
+            FROM spd.mv_overreplicated_continent o_continent
           WHERE
             o_continent.piece_id = pa.piece_id
               AND
@@ -1887,7 +1887,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
         OR
       EXISTS (
         SELECT 42
-          FROM egd.mv_orglocal_presence op
+          FROM spd.mv_orglocal_presence op
         WHERE
           op.piece_id = pa.piece_id
             AND
@@ -1901,7 +1901,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
     -- exclude my own known/in-flight
     NOT EXISTS (
       SELECT 42
-        FROM egd.mv_deals_prefiltered_for_repcount dpfr
+        FROM spd.mv_deals_prefiltered_for_repcount dpfr
       WHERE
         dpfr.piece_id = pa.piece_id
           AND
@@ -1914,7 +1914,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
     -- exclude my own pre-flight
     NOT EXISTS (
       SELECT 42
-        FROM egd.proposals pr
+        FROM spd.proposals pr
       WHERE
         pr.piece_id = pa.piece_id
           AND
@@ -1932,7 +1932,7 @@ $$;
 
 
 CREATE OR REPLACE
-  FUNCTION egd.pieces_eligible_full(
+  FUNCTION spd.pieces_eligible_full(
     arg_calling_provider_id INTEGER,
     arg_limit INTEGER,
     arg_only_tenant_id SMALLINT, -- use 0 for ~any~
@@ -1956,14 +1956,14 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
           sp.country_id,
           sp.continent_id,
           ( COALESCE( (spi.info->'sector_log2_size')::BIGINT, 0 ) >= 36 ) AS can_seal_64g_sectors
-        FROM egd.providers sp
-        LEFT JOIN egd.providers_info spi USING ( provider_id )
+        FROM spd.providers sp
+        LEFT JOIN spd.providers_info spi USING ( provider_id )
       WHERE
         sp.provider_id = arg_calling_provider_id
     ),
     enabled_tenants AS MATERIALIZED (
       SELECT tp.tenant_id
-        FROM egd.tenants_providers tp
+        FROM spd.tenants_providers tp
       WHERE
         tp.provider_id = arg_calling_provider_id
           AND
@@ -1976,7 +1976,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
       SELECT
           piece_id,
           ARRAY_AGG( et.tenant_id ) AS tenant_ids
-        FROM egd.mv_pieces_availability pa, sp, enabled_tenants et
+        FROM spd.mv_pieces_availability pa, sp, enabled_tenants et
 
       WHERE
 
@@ -1986,7 +1986,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_total o_total
+            FROM spd.mv_overreplicated_total o_total
           WHERE
             o_total.piece_id = pa.piece_id
               AND
@@ -1998,7 +1998,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_org o_org
+            FROM spd.mv_overreplicated_org o_org
           WHERE
             o_org.piece_id = pa.piece_id
               AND
@@ -2011,7 +2011,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_city o_city
+            FROM spd.mv_overreplicated_city o_city
           WHERE
             o_city.piece_id = pa.piece_id
               AND
@@ -2024,7 +2024,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_country o_country
+            FROM spd.mv_overreplicated_country o_country
           WHERE
             o_country.piece_id = pa.piece_id
               AND
@@ -2037,7 +2037,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
 
         NOT EXISTS (
           SELECT 42
-            FROM egd.mv_overreplicated_continent o_continent
+            FROM spd.mv_overreplicated_continent o_continent
           WHERE
             o_continent.piece_id = pa.piece_id
               AND
@@ -2055,7 +2055,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
       ( pa.coarse_latest_active_end_epoch IS NOT NULL ) AS has_sources_fil_active,
       pa.piece_cid,
       claiming_tenants.tenant_ids
-    FROM egd.mv_pieces_availability pa, sp , claiming_tenants
+    FROM spd.mv_pieces_availability pa, sp , claiming_tenants
 
   WHERE
     --
@@ -2091,7 +2091,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
         OR
       EXISTS (
         SELECT 42
-          FROM egd.mv_orglocal_presence op
+          FROM spd.mv_orglocal_presence op
         WHERE
           op.piece_id = pa.piece_id
             AND
@@ -2105,7 +2105,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
     -- exclude my own known/in-flight
     NOT EXISTS (
       SELECT 42
-        FROM egd.mv_deals_prefiltered_for_repcount dpfr
+        FROM spd.mv_deals_prefiltered_for_repcount dpfr
       WHERE
         dpfr.piece_id = pa.piece_id
           AND
@@ -2118,7 +2118,7 @@ LANGUAGE sql PARALLEL RESTRICTED STABLE STRICT AS $$
     -- exclude my own pre-flight
     NOT EXISTS (
       SELECT 42
-        FROM egd.proposals pr
+        FROM spd.proposals pr
       WHERE
         pr.piece_id = pa.piece_id
           AND

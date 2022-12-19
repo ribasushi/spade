@@ -8,15 +8,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	cmn "github.com/filecoin-project/evergreen-dealer/common"
-	"github.com/filecoin-project/evergreen-dealer/cron/filtypes"
-	"github.com/filecoin-project/evergreen-dealer/infomempeerstore"
 	filaddr "github.com/filecoin-project/go-address"
 	lotustypes "github.com/filecoin-project/lotus/chain/types"
 	"github.com/georgysavva/scany/pgxscan"
-	lp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
-	"github.com/urfave/cli/v2"
+	infomempeerstore "github.com/ribasushi/go-libp2p-infomempeerstore"
+	"github.com/ribasushi/go-toolbox-interplanetary/fil"
+	"github.com/ribasushi/go-toolbox-interplanetary/lp2p"
+	"github.com/ribasushi/go-toolbox/cmn"
+	"github.com/ribasushi/go-toolbox/ufcli"
+	"github.com/ribasushi/spade/internal/app"
+	"github.com/ribasushi/spade/internal/filtypes"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -25,7 +27,7 @@ import (
 type spInfo struct {
 	Errors             []string                         `json:"errors,omitempty"`
 	SectorLog2Size     uint8                            `json:"sector_log2_size"`
-	PeerID             *lp2ppeer.ID                     `json:"peerid"`
+	PeerID             *lp2p.PeerID                     `json:"peerid"`
 	MultiAddrs         []multiaddr.Multiaddr            `json:"multiaddrs"`
 	PeerInfo           *infomempeerstore.PeerData       `json:"peer_info,omitempty"`
 	RetrievalProtocols map[string][]multiaddr.Multiaddr `json:"retrieval_protocols,omitempty"`
@@ -39,48 +41,48 @@ var (
 	pollTimeout     int
 )
 
-var pollProviders = &cli.Command{
+var pollProviders = &ufcli.Command{
 	Usage: "Query metadata of recently-seen storage providers",
 	Name:  "poll-providers",
-	Flags: []cli.Flag{
-		&cli.BoolFlag{
+	Flags: []ufcli.Flag{
+		&ufcli.BoolFlag{
 			Name:        "requery-all",
 			Usage:       "Query every SP that is known to the app",
 			Destination: &pollRequeryAll,
 		},
-		&cli.IntFlag{
+		&ufcli.IntFlag{
 			Name:        "query-concurrency",
 			Usage:       "How many SPs to query concurrently",
 			Value:       64,
 			Destination: &pollConcurrency,
 		},
-		&cli.IntFlag{
+		&ufcli.IntFlag{
 			Name:        "query-timeout",
 			Usage:       "Query timeout in seconds",
 			Value:       10,
 			Destination: &pollTimeout,
 		},
 	},
-	Action: func(cctx *cli.Context) error {
-		ctx := cctx.Context
+	Action: func(cctx *ufcli.Context) error {
+		ctx, log, db, _ := app.UnpackCtx(cctx.Context)
 
-		allSPs := make([]cmn.ActorID, 0, 2<<10)
+		allSPs := make([]fil.ActorID, 0, 2<<10)
 		if err := pgxscan.Select(
 			ctx,
-			cmn.Db,
+			db,
 			&allSPs,
 			`
 			(
 				SELECT DISTINCT(p.provider_id)
-					FROM egd.providers p
-					LEFT JOIN egd.providers_info pi USING ( provider_id )
+					FROM spd.providers p
+					LEFT JOIN spd.providers_info pi USING ( provider_id )
 				WHERE
 					$1
 						OR
 					(
 						EXISTS (
 							SELECT 42 FROM
-								egd.requests r
+								spd.requests r
 							WHERE
 								r.provider_id = p.provider_id
 									AND
@@ -101,8 +103,8 @@ var pollProviders = &cli.Command{
 
 			(
 				SELECT p.provider_id
-					FROM egd.providers p
-					LEFT JOIN egd.providers_info pi USING ( provider_id )
+					FROM spd.providers p
+					LEFT JOIN spd.providers_info pi USING ( provider_id )
 				WHERE
 					pi.provider_last_polled IS NULL
 						OR
@@ -112,26 +114,26 @@ var pollProviders = &cli.Command{
 			)
 			`,
 			pollRequeryAll,
-			fmt.Sprintf("%d minutes", (cmn.PolledSPInfoStaleAfterMinutes/3*2)),
+			fmt.Sprintf("%d minutes", (app.PolledSPInfoStaleAfterMinutes/3*2)),
 			filtypes.StorageProposalV120,
 		); err != nil {
 			return cmn.WrErr(err)
 		}
 
 		totals := struct {
-			totalQueried  int
+			totalQueried  *int32
 			unaddressable *int32
 			undialable    *int32
 			lacksV120     *int32
 		}{
-			totalQueried:  len(allSPs),
+			totalQueried:  new(int32),
 			unaddressable: new(int32),
 			undialable:    new(int32),
 			lacksV120:     new(int32),
 		}
 		defer func() {
 			log.Infow("summary",
-				"totalQueried", totals.totalQueried,
+				"totalQueried", atomic.LoadInt32(totals.totalQueried),
 				"unaddressable", atomic.LoadInt32(totals.unaddressable),
 				"undialable", atomic.LoadInt32(totals.undialable),
 				"lacksV120", atomic.LoadInt32(totals.lacksV120),
@@ -154,6 +156,8 @@ var pollProviders = &cli.Command{
 					return err
 				}
 
+				atomic.AddInt32(totals.totalQueried, 1)
+
 				switch {
 				case len(spi.MultiAddrs) == 0:
 					atomic.AddInt32(totals.unaddressable, 1)
@@ -163,10 +167,10 @@ var pollProviders = &cli.Command{
 					atomic.AddInt32(totals.lacksV120, 1)
 				}
 
-				_, err = cmn.Db.Exec(
+				_, err = db.Exec(
 					ctx,
 					`
-					INSERT INTO egd.providers_info
+					INSERT INTO spd.providers_info
 						( provider_id, provider_last_polled, info_dialing_took_msecs, info_dialing_peerid, info )
 						VALUES ( $1, NOW(), $2, $3, $4 )
 					ON CONFLICT ( provider_id ) DO UPDATE SET
@@ -188,10 +192,13 @@ var pollProviders = &cli.Command{
 }
 
 func getSPInfo(ctx context.Context, sp filaddr.Address, timeOut time.Duration) (spInfo, error) {
+	ctx, log, _, gctx := app.UnpackCtx(ctx)
+
+	// per-SP timeout
 	ctx, ctxCloser := context.WithTimeout(ctx, timeOut)
 	defer ctxCloser()
 
-	mi, err := cmn.LotusAPICurState.StateMinerInfo(ctx, sp, lotustypes.EmptyTSK)
+	mi, err := gctx.LotusAPI[app.FilLite].StateMinerInfo(ctx, sp, lotustypes.EmptyTSK)
 	if err != nil {
 		return spInfo{}, cmn.WrErr(err)
 	}
@@ -225,7 +232,7 @@ func getSPInfo(ctx context.Context, sp filaddr.Address, timeOut time.Duration) (
 		return spi, nil
 	}
 
-	nodeHost, peerStore, err := newLp2pNode(timeOut)
+	nodeHost, peerStore, err := lp2p.NewPlainNodeTCP(timeOut)
 	if err != nil {
 		return spInfo{}, cmn.WrErr(err)
 	}
@@ -241,7 +248,7 @@ func getSPInfo(ctx context.Context, sp filaddr.Address, timeOut time.Duration) (
 	nodeHost.ConnManager().Protect(*spi.PeerID, pTag)
 	defer nodeHost.ConnManager().Unprotect(*spi.PeerID, pTag)
 	t0 := time.Now()
-	err = nodeHost.Connect(ctx, lp2ppeer.AddrInfo{
+	err = nodeHost.Connect(ctx, lp2p.AddrInfo{
 		ID:    *spi.PeerID,
 		Addrs: spi.MultiAddrs,
 	})
@@ -298,7 +305,7 @@ func getSPInfo(ctx context.Context, sp filaddr.Address, timeOut time.Duration) (
 		}
 
 		respRetTrans := new(filtypes.RetrievalTransports100RawResponse)
-		if err := lp2pRPC(
+		if err := lp2p.DoCborRPC(
 			ctxEg,
 			nodeHost,
 			*spi.PeerID,

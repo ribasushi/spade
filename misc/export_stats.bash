@@ -3,8 +3,8 @@
 set -eu
 set -o pipefail
 
-export pgconn="service=egd"
-export wwwdir="$HOME/WEB/public"
+export pgconn="service=spd"
+export wwwdir="/var/www/spade/public"
 export atcat="$( dirname "${BASH_SOURCE[0]}" )/atomic_cat.bash"
 
 ###
@@ -23,7 +23,7 @@ ex_clients() {
   psql $pgconn -At -c "
     SELECT
         UNNEST( ARRAY[ 'f0' || client_id::TEXT, client_address ] )
-      FROM egd.clients
+      FROM spd.clients
     WHERE tenant_id IS NOT NULL
     ORDER BY client_id
   " | "$atcat" "$wwwdir/clients.txt"

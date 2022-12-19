@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
-	cmn "github.com/filecoin-project/evergreen-dealer/common"
 	filaddr "github.com/filecoin-project/go-address"
 	filabi "github.com/filecoin-project/go-state-types/abi"
 	filbig "github.com/filecoin-project/go-state-types/big"
@@ -17,19 +16,21 @@ import (
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/ipfs/go-cid"
 	"github.com/jackc/pgx/v4"
-	"github.com/urfave/cli/v2"
+	"github.com/ribasushi/go-toolbox-interplanetary/fil"
+	"github.com/ribasushi/go-toolbox/cmn"
+	"github.com/ribasushi/go-toolbox/ufcli"
+	"github.com/ribasushi/spade/internal/app"
 	"golang.org/x/xerrors"
 )
 
-var trackDeals = &cli.Command{
+var trackDeals = &ufcli.Command{
 	Usage: "Track state of fil deals related to known PieceCIDs",
 	Name:  "track-deals",
-	Flags: []cli.Flag{},
-	Action: func(cctx *cli.Context) error {
+	Flags: []ufcli.Flag{},
+	Action: func(cctx *ufcli.Context) error {
+		ctx, log, db, gctx := app.UnpackCtx(cctx.Context)
 
-		ctx := cctx.Context
-
-		curTipset, err := cmn.DefaultLookbackTipset(ctx)
+		curTipset, err := app.DefaultLookbackTipset(ctx)
 		if err != nil {
 			return cmn.WrErr(err)
 		}
@@ -39,7 +40,7 @@ var trackDeals = &cli.Command{
 		go func() {
 			defer close(dealQueryDone)
 			log.Infow("retrieving Market Deals from", "state", curTipset.Key(), "epoch", curTipset.Height(), "wallTime", time.Unix(int64(curTipset.Blocks()[0].Timestamp), 0))
-			stateDeals, err = cmn.LotusAPIHeavy.StateMarketDeals(ctx, curTipset.Key())
+			stateDeals, err = gctx.LotusAPI[app.FilHeavy].StateMarketDeals(ctx, curTipset.Key())
 			if err != nil {
 				dealQueryDone <- cmn.WrErr(err)
 				return
@@ -47,19 +48,19 @@ var trackDeals = &cli.Command{
 			log.Infof("retrieved %s state deal records", humanize.Comma(int64(len(stateDeals))))
 		}()
 
-		tenantClients := make([]cmn.ActorID, 0, 32)
+		tenantClients := make([]fil.ActorID, 0, 32)
 		if err := pgxscan.Select(
 			ctx,
-			cmn.Db,
+			db,
 			&tenantClients,
-			`SELECT client_id FROM egd.clients WHERE tenant_id IS NOT NULL`,
+			`SELECT client_id FROM spd.clients WHERE tenant_id IS NOT NULL`,
 		); err != nil {
 			return cmn.WrErr(err)
 		}
 
 		tenantClientDatacap := make(map[filaddr.Address]*filbig.Int, len(tenantClients))
 		for _, c := range tenantClients {
-			dcap, err := cmn.LotusAPICurState.StateVerifiedClientStatus(ctx, c.AsFilAddr(), curTipset.Key())
+			dcap, err := gctx.LotusAPI[app.FilLite].StateVerifiedClientStatus(ctx, c.AsFilAddr(), curTipset.Key())
 			if err != nil {
 				return cmn.WrErr(err)
 			}
@@ -77,11 +78,11 @@ var trackDeals = &cli.Command{
 		// entries from this list are deleted below as we process the new state
 		initialDbDeals := make(map[int64]filDeal)
 
-		rows, err := cmn.Db.Query(
+		rows, err := db.Query(
 			ctx,
 			`
 			SELECT d.deal_id, d.piece_id, d.piece_cid, d.status
-				FROM egd.published_deals d
+				FROM spd.published_deals d
 			`,
 		)
 		if err != nil {
@@ -131,8 +132,8 @@ var trackDeals = &cli.Command{
 			*lotusapi.MarketDeal
 			dealID            int64
 			pieceID           int64
-			providerID        cmn.ActorID
-			clientID          cmn.ActorID
+			providerID        fil.ActorID
+			clientID          fil.ActorID
 			pieceLog2Size     uint8
 			prevState         *filDeal
 			sectorStart       *filabi.ChainEpoch
@@ -230,11 +231,11 @@ var trackDeals = &cli.Command{
 				return cmn.WrErr(err)
 			}
 
-			d.clientID, err = cmn.ParseActorString(d.Proposal.Client.String())
+			d.clientID, err = fil.ParseActorString(d.Proposal.Client.String())
 			if err != nil {
 				return cmn.WrErr(err)
 			}
-			d.providerID, err = cmn.ParseActorString(d.Proposal.Provider.String())
+			d.providerID, err = fil.ParseActorString(d.Proposal.Provider.String())
 			if err != nil {
 				return cmn.WrErr(err)
 			}
@@ -261,19 +262,19 @@ var trackDeals = &cli.Command{
 			humanize.Comma(int64(len(toFail))),
 		)
 
-		return cmn.Db.BeginTxFunc(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return db.BeginTxFunc(ctx, pgx.TxOptions{}, func(tx pgx.Tx) error {
 
 			for _, d := range toUpsert {
 				if err = tx.QueryRow(
 					ctx,
 					`
-					INSERT INTO egd.published_deals
+					INSERT INTO spd.published_deals
 						( deal_id, client_id, provider_id, piece_cid, claimed_log2_size, label, decoded_label, is_filplus, status, published_deal_meta, start_epoch, end_epoch, sector_start_epoch )
 						VALUES ( $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::JSONB, $11, $12, $13 )
 					ON CONFLICT ( deal_id ) DO UPDATE SET
 						status = EXCLUDED.status,
-						published_deal_meta = egd.published_deals.published_deal_meta || EXCLUDED.published_deal_meta,
-						sector_start_epoch = COALESCE( EXCLUDED.sector_start_epoch, egd.published_deals.sector_start_epoch )
+						published_deal_meta = spd.published_deals.published_deal_meta || EXCLUDED.published_deal_meta,
+						sector_start_epoch = COALESCE( EXCLUDED.sector_start_epoch, spd.published_deals.sector_start_epoch )
 					RETURNING piece_id
 					`,
 					d.dealID,
@@ -297,7 +298,7 @@ var trackDeals = &cli.Command{
 					if _, err := tx.Exec(
 						ctx,
 						`
-						UPDATE egd.proposals
+						UPDATE spd.proposals
 							SET activated_deal_id = $1
 						WHERE
 							proposal_failstamp = 0
@@ -327,7 +328,7 @@ var trackDeals = &cli.Command{
 				if _, err = tx.Exec(
 					ctx,
 					`
-					UPDATE egd.published_deals SET
+					UPDATE spd.published_deals SET
 						status = 'terminated',
 						published_deal_meta = published_deal_meta || '{ "termination_reason":"deal no longer part of market-actor state" }'
 					WHERE
@@ -351,13 +352,13 @@ var trackDeals = &cli.Command{
 				if _, err := tx.Exec(
 					ctx,
 					`
-					UPDATE egd.clients SET
+					UPDATE spd.clients SET
 						client_meta = JSONB_SET( client_meta, '{ activatable_datacap }', TO_JSONB( $1::BIGINT ) )
 					WHERE
 						client_id = $2
 					`,
 					di,
-					cmn.MustParseActorString(c.String()),
+					fil.MustParseActorString(c.String()),
 				); err != nil {
 					return cmn.WrErr(err)
 				}
@@ -367,11 +368,11 @@ var trackDeals = &cli.Command{
 			if _, err := tx.Exec(
 				ctx,
 				`
-				UPDATE egd.pieces SET piece_meta = piece_meta || '{ "size_proven_correct":true }',
+				UPDATE spd.pieces SET piece_meta = piece_meta || '{ "size_proven_correct":true }',
 						piece_log2_size = active.proven_log2_size
 					FROM (
 						SELECT pd.piece_id, pd.claimed_log2_size AS proven_log2_size
-							FROM egd.published_deals pd, egd.pieces p
+							FROM spd.published_deals pd, spd.pieces p
 						WHERE
 							( NOT COALESCE( (p.piece_meta->'size_proven_correct')::BOOL, false) )
 								AND
@@ -392,8 +393,8 @@ var trackDeals = &cli.Command{
 			if _, err := tx.Exec(
 				ctx,
 				`
-				UPDATE egd.proposals SET
-					proposal_failstamp = egd.big_now(),
+				UPDATE spd.proposals SET
+					proposal_failstamp = spd.big_now(),
 					proposal_meta = JSONB_SET(
 						proposal_meta,
 						'{ failure }',
@@ -415,16 +416,16 @@ var trackDeals = &cli.Command{
 			if _, err := tx.Exec(
 				ctx,
 				`
-				UPDATE egd.proposals SET
+				UPDATE spd.proposals SET
 					activated_deal_id = NULL,
-					proposal_failstamp = egd.big_now(),
+					proposal_failstamp = spd.big_now(),
 					proposal_meta = JSONB_SET(
 						proposal_meta,
 						'{ failure }',
 						TO_JSONB( 'sector containing deal was terminated'::TEXT )
 					)
 				WHERE
-					activated_deal_id IN ( SELECT deal_id FROM egd.published_deals WHERE status = 'terminated' )
+					activated_deal_id IN ( SELECT deal_id FROM spd.published_deals WHERE status = 'terminated' )
 				`,
 			); err != nil {
 				return cmn.WrErr(err)
@@ -434,15 +435,15 @@ var trackDeals = &cli.Command{
 			if _, err := tx.Exec(
 				ctx,
 				`
-				UPDATE egd.proposals SET
-					proposal_failstamp = egd.big_now(),
+				UPDATE spd.proposals SET
+					proposal_failstamp = spd.big_now(),
 					proposal_meta = JSONB_SET(
 						proposal_meta,
 						'{ failure }',
 						TO_JSONB( 'deal declared invalid'::TEXT )
 					)
 				WHERE
-					activated_deal_id IN ( SELECT deal_id FROM egd.invalidated_deals )
+					activated_deal_id IN ( SELECT deal_id FROM spd.invalidated_deals )
 				`,
 			); err != nil {
 				return cmn.WrErr(err)
@@ -459,7 +460,7 @@ var trackDeals = &cli.Command{
 			if _, err := tx.Exec(
 				ctx,
 				`
-				UPDATE egd.global SET metadata = JSONB_SET( metadata, '{ market_state }', $1 )
+				UPDATE spd.global SET metadata = JSONB_SET( metadata, '{ market_state }', $1 )
 				`,
 				msJ,
 			); err != nil {

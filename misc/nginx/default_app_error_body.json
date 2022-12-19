@@ -1,4 +1,5 @@
 {
+  "response_timestamp": "<!--# echo var="time_iso8601" default="" -->",
   "response_code": <!--# echo var="status" default="000" -->,
   "error_lines": [
     " Your request resulted in the non-2xx status: <!--# echo var="status" default="000" -->                             ",

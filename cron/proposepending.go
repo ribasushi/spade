@@ -7,18 +7,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	cmn "github.com/filecoin-project/evergreen-dealer/common"
-	"github.com/filecoin-project/evergreen-dealer/cron/filtypes"
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/google/uuid"
 	"github.com/ipfs/go-cid"
 	"github.com/multiformats/go-multiaddr"
-	"github.com/urfave/cli/v2"
+	"github.com/ribasushi/go-toolbox-interplanetary/lp2p"
+	"github.com/ribasushi/go-toolbox/cmn"
+	"github.com/ribasushi/go-toolbox/ufcli"
+	"github.com/ribasushi/spade/internal/app"
+	"github.com/ribasushi/spade/internal/filtypes"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/xerrors"
-
-	lp2phost "github.com/libp2p/go-libp2p/core/host"
-	lp2ppeer "github.com/libp2p/go-libp2p/core/peer"
 
 	filaddr "github.com/filecoin-project/go-address"
 	filmarket "github.com/filecoin-project/go-state-types/builtin/v9/market"
@@ -34,7 +33,7 @@ type proposalPending struct {
 	ProposalPayload      filmarket.DealProposal
 	ProposalSignature    filcrypto.Signature
 	ProposalCid          string
-	PeerID               *lp2ppeer.ID
+	PeerID               *lp2p.PeerID
 	Multiaddrs           []string
 	ProviderSupportsV120 bool
 }
@@ -54,31 +53,31 @@ var (
 	proposalTimeout int
 	perSpTimeout    int
 )
-var proposePending = &cli.Command{
+var proposePending = &ufcli.Command{
 	Usage: "Propose pending deals to providers",
 	Name:  "propose-pending",
-	Flags: []cli.Flag{
-		&cli.IntFlag{
+	Flags: []ufcli.Flag{
+		&ufcli.IntFlag{
 			Name:        "sleep-between-proposals",
 			Usage:       "Amount of seconds to wait between proposals to same SP",
 			Value:       3,
 			Destination: &spProposalSleep,
 		},
-		&cli.IntFlag{
+		&ufcli.IntFlag{
 			Name:        "proposal-timeout",
 			Usage:       "Amount of seconds before aborting a specific proposal",
 			Value:       30,
 			Destination: &proposalTimeout,
 		},
-		&cli.IntFlag{
+		&ufcli.IntFlag{
 			Name:        "per-sp-timeout",
 			Usage:       "Amount of seconds proposals for specific SP could take in total",
 			Value:       270, // 4.5 mins
 			Destination: &perSpTimeout,
 		},
 	},
-	Action: func(cctx *cli.Context) error {
-		ctx := cctx.Context
+	Action: func(cctx *ufcli.Context) error {
+		ctx, log, db, _ := app.UnpackCtx(cctx.Context)
 
 		tot := runTotals{
 			deliveredLegacy: new(int32),
@@ -100,7 +99,7 @@ var proposePending = &cli.Command{
 		pending := make([]proposalPending, 0, 2048)
 		if err := pgxscan.Select(
 			ctx,
-			cmn.Db,
+			db,
 			&pending,
 			`
 			SELECT
@@ -112,9 +111,9 @@ var proposePending = &cli.Command{
 					( pi.info->'peer_info'->'libp2p_protocols'->$1 ) IS NOT NULL AS provider_supports_v120,
 					pi.info->'peerid' AS peer_id,
 					pi.info->'multiaddrs' AS multiaddrs
-				FROM egd.proposals pr
-				JOIN egd.pieces p USING ( piece_id )
-				LEFT JOIN egd.providers_info pi USING ( provider_id )
+				FROM spd.proposals pr
+				JOIN spd.pieces p USING ( piece_id )
+				LEFT JOIN spd.providers_info pi USING ( provider_id )
 			WHERE
 				proposal_delivered IS NULL
 					AND
@@ -132,11 +131,11 @@ var proposePending = &cli.Command{
 		for _, p := range pending {
 
 			if p.PeerID == nil || len(p.Multiaddrs) == 0 {
-				if _, err := cmn.Db.Exec(
+				if _, err := db.Exec(
 					context.Background(), // deliberate: even if outer context is cancelled we still need to write to DB
 					`
-					UPDATE egd.proposals SET
-						proposal_failstamp = egd.big_now(),
+					UPDATE spd.proposals SET
+						proposal_failstamp = spd.big_now(),
 						proposal_meta = JSONB_SET( proposal_meta, '{ failure }', TO_JSONB( 'provider not dialable: insufficient information published on chain'::TEXT ) )
 					WHERE
 						proposal_uuid = $1
@@ -163,6 +162,7 @@ var proposePending = &cli.Command{
 }
 
 func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) error {
+	ctx, log, db, gctx := app.UnpackCtx(ctx)
 
 	sp := props[0].ProposalPayload.Provider
 	propType := "legacy"
@@ -191,7 +191,7 @@ func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) er
 	ctx, cancel := context.WithDeadline(ctx, t0.Add(time.Duration(perSpTimeout)*time.Second))
 	defer cancel()
 
-	var nodeHost lp2phost.Host
+	var nodeHost lp2p.Host
 	var dialTookMsecs *int64
 	var localPeerid *string
 	for i, p := range props {
@@ -214,7 +214,7 @@ func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) er
 			var propCid *cid.Cid
 			tCtx, tCtxCancel := context.WithTimeout(ctx, time.Duration(proposalTimeout)*time.Second)
 			t1 := time.Now()
-			propCid, callErr = cmn.LotusAPIHeavy.ClientStatelessDeal(
+			propCid, callErr = gctx.LotusAPI[app.FilHeavy].ClientStatelessDeal(
 				tCtx,
 				&lotusapi.StartDealParams{
 					DealStartEpoch:     p.ProposalPayload.StartEpoch,
@@ -246,7 +246,7 @@ func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) er
 			if nodeHost == nil {
 
 				var err error
-				nodeHost, _, err = newLp2pNode(time.Duration(proposalTimeout) * time.Second)
+				nodeHost, _, err = lp2p.NewPlainNodeTCP(time.Duration(proposalTimeout) * time.Second)
 				if err != nil {
 					return cmn.WrErr(err)
 				}
@@ -269,7 +269,7 @@ func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) er
 					addrs[i] = multiaddr.StringCast(p.Multiaddrs[i])
 				}
 				t1 := time.Now()
-				callErr = nodeHost.Connect(ctx, lp2ppeer.AddrInfo{
+				callErr = nodeHost.Connect(ctx, lp2p.AddrInfo{
 					ID:    *p.PeerID,
 					Addrs: addrs,
 				})
@@ -281,7 +281,7 @@ func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) er
 				var resp filtypes.StorageProposalV120Response
 				tCtx, tCtxCancel := context.WithTimeout(ctx, time.Duration(proposalTimeout)*time.Second)
 				t1 := time.Now()
-				callErr = lp2pRPC(
+				callErr = lp2p.DoCborRPC(
 					tCtx,
 					nodeHost,
 					*p.PeerID,
@@ -321,10 +321,10 @@ func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) er
 				log.Warnf("proposal CID mismatch on success: expected %s got %s", p.ProposalCid, *propCidStr)
 			}
 
-			if _, err := cmn.Db.Exec(
+			if _, err := db.Exec(
 				context.Background(), // deliberate: even if outer context is cancelled we still need to write to DB
 				`
-				UPDATE egd.proposals SET
+				UPDATE spd.proposals SET
 					proposal_delivered = NOW(),
 					proposal_meta = JSONB_STRIP_NULLS(
 						JSONB_SET(
@@ -370,11 +370,11 @@ func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) er
 				atomic.AddInt32(tot.failed, 1)
 			}
 
-			if _, err := cmn.Db.Exec(
+			if _, err := db.Exec(
 				context.Background(), // deliberate: even if outer context is cancelled we still need to write to DB
 				`
-				UPDATE egd.proposals SET
-					proposal_failstamp = egd.big_now(),
+				UPDATE spd.proposals SET
+					proposal_failstamp = spd.big_now(),
 					proposal_meta = JSONB_STRIP_NULLS(
 						JSONB_SET(
 							JSONB_SET(

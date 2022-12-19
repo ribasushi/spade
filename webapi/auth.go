@@ -11,8 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	cmn "github.com/filecoin-project/evergreen-dealer/common"
-	"github.com/filecoin-project/evergreen-dealer/webapi/types"
+	apitypes "github.com/data-preservation-programs/go-spade-apitypes"
 	filaddr "github.com/filecoin-project/go-address"
 	filabi "github.com/filecoin-project/go-state-types/abi"
 	filprovider "github.com/filecoin-project/go-state-types/builtin/v9/miner"
@@ -20,6 +19,9 @@ import (
 	lotustypes "github.com/filecoin-project/lotus/chain/types"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/labstack/echo/v4"
+	"github.com/ribasushi/go-toolbox-interplanetary/fil"
+	"github.com/ribasushi/go-toolbox/cmn"
+	"github.com/ribasushi/spade/internal/app"
 )
 
 const (
@@ -90,7 +92,7 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 			return retAuthFail(c, "unexpected %s auth epoch '%s'", authScheme, challenge.hdr.epoch)
 		}
 
-		curFilEpoch := int64(cmn.WallTimeEpoch(time.Now()))
+		curFilEpoch := int64(fil.WallTimeEpoch(time.Now()))
 		if curFilEpoch < challenge.epoch {
 			return retAuthFail(c, "%s auth epoch '%d' is in the future", authScheme, challenge.epoch)
 		}
@@ -119,13 +121,13 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		// set only on request object for logging, not part of response
-		c.Request().Header.Set("X-EGD-LOGGED-SP", challenge.addr.String())
+		c.Request().Header.Set("X-SPADE-LOGGED-SP", challenge.addr.String())
 
 		// if challenge.addr.String() == "f01" {
 		// 	challenge.addr, _ = filaddr.NewFromString("f02")
 		// }
 
-		spID := cmn.MustParseActorString(challenge.addr.String())
+		spID := fil.MustParseActorString(challenge.addr.String())
 
 		reqCopy := c.Request().Clone(ctx)
 		// do not need to store any IPs anywhere in the DB
@@ -154,16 +156,16 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 		var requestUUID string
 		var stateEpoch int64
 		var spDetails []int16
-		var spInfo types.SPInfo
+		var spInfo apitypes.SPInfo
 		var spInfoLastPoll *time.Time
-		if err := cmn.Db.QueryRow(
+		if err := app.GetGlobalCtx(ctx).Db[app.DbMain].QueryRow(
 			ctx,
 			`
-			INSERT INTO egd.requests ( provider_id, request_dump )
+			INSERT INTO spd.requests ( provider_id, request_dump )
 				VALUES ( $1, $2 )
 			RETURNING
 				request_uuid,
-				( SELECT ( metadata->'market_state'->'epoch' )::INTEGER FROM egd.global ),
+				( SELECT ( metadata->'market_state'->'epoch' )::INTEGER FROM spd.global ),
 				(
 					SELECT
 						ARRAY[
@@ -172,17 +174,17 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 							country_id,
 							continent_id
 						]
-					FROM egd.providers
+					FROM spd.providers
 					WHERE provider_id = $1
 				),
 				(
 					SELECT info
-						FROM egd.providers_info
+						FROM spd.providers_info
 					WHERE provider_id = $1
 				),
 				(
 					SELECT provider_last_polled
-						FROM egd.providers_info
+						FROM spd.providers_info
 					WHERE provider_id = $1
 				)
 			`,
@@ -192,13 +194,14 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 			return cmn.WrErr(err)
 		}
 
-		c.Response().Header().Set("X-EGD-FIL-SPID", challenge.addr.String())
+		c.Response().Header().Set("X-SPADE-FIL-SPID", challenge.addr.String())
 
 		// set on both request (for logging ) and response object
-		c.Request().Header.Set("X-EGD-REQUEST-UUID", requestUUID)
-		c.Response().Header().Set("X-EGD-REQUEST-UUID", requestUUID)
+		c.Request().Header.Set("X-SPADE-REQUEST-UUID", requestUUID)
+		c.Response().Header().Set("X-SPADE-REQUEST-UUID", requestUUID)
 
-		c.Set("egd-meta", metaContext{
+		c.Set("♠️", metaContext{
+			GlobalContext:    app.GetGlobalCtx(ctx),
 			stateEpoch:       stateEpoch,
 			authedActorID:    spID,
 			authArg:          challenge.arg,
@@ -215,9 +218,10 @@ func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 type metaContext struct {
-	authedActorID    cmn.ActorID
+	app.GlobalContext
+	authedActorID    fil.ActorID
 	stateEpoch       int64
-	spInfo           types.SPInfo
+	spInfo           apitypes.SPInfo
 	spInfoLastPolled *time.Time
 	spOrgID          int16
 	spCityID         int16
@@ -227,7 +231,7 @@ type metaContext struct {
 }
 
 func unpackAuthedEchoContext(c echo.Context) (context.Context, metaContext) {
-	meta, _ := c.Get("egd-meta").(metaContext) // ignore potential nil error on purpose
+	meta, _ := c.Get("♠️").(metaContext) // ignore potential nil error on purpose
 	return c.Request().Context(), meta
 }
 
@@ -240,29 +244,33 @@ func verifySig(ctx context.Context, challenge sigChallenge) (verifySigResult, er
 		}, nil
 	}
 
+	apis := app.GetGlobalCtx(ctx).LotusAPI
+	hAPI := apis[app.FilHeavy]
+	lAPI := apis[app.FilLite]
+
 	be, didFind := beaconCache.Get(challenge.epoch)
 	if !didFind {
-		be, err = cmn.LotusAPIHeavy.StateGetBeaconEntry(ctx, filabi.ChainEpoch(challenge.epoch))
+		be, err = hAPI.StateGetBeaconEntry(ctx, filabi.ChainEpoch(challenge.epoch))
 		if err != nil {
 			return verifySigResult{}, cmn.WrErr(err)
 		}
 		beaconCache.Add(challenge.epoch, be)
 	}
 
-	miFinTs, err := cmn.LotusAPICurState.ChainGetTipSetByHeight(ctx, filabi.ChainEpoch(challenge.epoch)-filprovider.ChainFinality, lotustypes.EmptyTSK)
+	miFinTs, err := lAPI.ChainGetTipSetByHeight(ctx, filabi.ChainEpoch(challenge.epoch)-filprovider.ChainFinality, lotustypes.EmptyTSK)
 	if err != nil {
 		return verifySigResult{}, cmn.WrErr(err)
 	}
-	mi, err := cmn.LotusAPICurState.StateMinerInfo(ctx, challenge.addr, miFinTs.Key())
+	mi, err := lAPI.StateMinerInfo(ctx, challenge.addr, miFinTs.Key())
 	if err != nil {
 		return verifySigResult{}, cmn.WrErr(err)
 	}
-	workerAddr, err := cmn.LotusAPICurState.StateAccountKey(ctx, mi.Worker, miFinTs.Key())
+	workerAddr, err := lAPI.StateAccountKey(ctx, mi.Worker, miFinTs.Key())
 	if err != nil {
 		return verifySigResult{}, cmn.WrErr(err)
 	}
 
-	sigMatch, err := cmn.LotusAPIHeavy.WalletVerify(
+	sigMatch, err := hAPI.WalletVerify(
 		ctx,
 		workerAddr,
 		append(append([]byte{0x20, 0x20, 0x20}, be.Data...), challenge.arg...),

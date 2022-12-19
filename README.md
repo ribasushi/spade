@@ -1,18 +1,18 @@
-filecoin-evergreen-dealer
+spade
 ==================
 
-This repository contains the software powering the EverGreen Dealer (EGD):
+This repository contains the software powering the ♠️ (Spade) API:
 A Fil-Network Storage-Proposal Management Service.
 
-EGD provides a low-friction environment for Storage Providers (SP) to receive a
+Spade provides a low-friction environment for Storage Providers (SP) to receive a
 virtually unlimited volume of FilecoinPlus (Fil+) denominated storage deals.
 It does this by aggregating storage requests and metadata from various sources
-(EGD tenants) and then presenting the aggregate as a single machine- and
+(♠️ tenants) and then presenting the aggregate as a single machine- and
 human-readable stream to participating SPs. SPs in turn consume this aggregated
 list and can trigger an instant storage deal proposal for any entry, as long as
 the proposal does not violate the terms set by the originating tenant.
 
-A distinct feature of an EGD service is its focus on throughput 🚀 and thus its
+A distinct feature of the ♠️ service is its focus on throughput 🚀 and thus its
 design exclusively around a "pull" workflow. A deal proposal can only be initiated
 by the receiving SP and all deal proposals are, without exception, made for
 **out-of-band data flow** (often mislabeled *offline deals*). This gives **complete
@@ -53,7 +53,7 @@ It is also likely this functionality will be soon included in Fil implementation
 
   B. Make it executable `chmod 755 fil-spid.bash`
 
-  C. Use it as part of your requests, e.g: `curl -sLH "Authorization: $( ./fil-spid.bash f0XXXX )" https://api.spade.storage/sp/pending_proposals`
+  C. Use it as part of your requests, e.g: `curl -sLH "Authorization: $( ./fil-spid.bash f0XXXX )" https://api.spade.storage/sp/status`
 
 
 * Register with one or more of the currently available tenants. Any authenticated SP can examine the current list of tenants, the nature of their content, and their various sign-up and service conditions, by simply calling https://api.spade.storage/sp/status
@@ -61,7 +61,7 @@ It is also likely this functionality will be soon included in Fil implementation
 ### SP Dealmaking
 
 * After the above steps are completed an SP is ready to participate in an all-you-can-seal 🦭 buffet, by iterating over the following [API] calls.
-Note that you are not confined to using `curl`, which is simply used for simplicity of the examples. You can and are encouraged to develop your own small program autonomously consuming the EGD [API].
+Note that you are not confined to using `curl`, which is simply used for simplicity of the examples. You can and are encouraged to develop your own small program autonomously consuming the ♠️ [API].
 
   1. Use `/sp/eligible_pieces` to examine the lists of `PieceCID`s and potential data-sources which your SP is eligible to seal. Note that you can skip this step if you are working with a tenant directly: just move to 2) if you already have a list of `PieceCID`s.
 
@@ -85,5 +85,5 @@ Note that you are not confined to using `curl`, which is simply used for simplic
 
 In case of any difficulties or issues, don't hesitate to contact us in [#spade over at the Fil Slack]: we are happy to hear from you 🤩
 
-[API]: https://raw.githubusercontent.com/filecoin-project/evergreen-dealer/master/webapi/routes.go
+[API]: https://raw.githubusercontent.com/ribasushi/spade/master/webapi/routes.go
 [#spade over at the Fil Slack]: https://filecoinproject.slack.com/archives/C0377FJCG1L

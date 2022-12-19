@@ -23,7 +23,7 @@ func registerRoutes(e *echo.Echo) {
 	//
 	// - limit = <integer>
 	//   How many results to return at most
-	//   default=cmn.ListEligibleDefaultSize
+	//   default=listEligibleDefaultSize
 	//
 	// - tenant = <integer>
 	//   Restrict the list to only pieces claimed by this numeric TenantID. No restriction if unspecified.

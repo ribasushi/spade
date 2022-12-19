@@ -3,12 +3,13 @@ package main
 import (
 	"sync/atomic"
 
-	cmn "github.com/filecoin-project/evergreen-dealer/common"
 	filaddr "github.com/filecoin-project/go-address"
 	cborutil "github.com/filecoin-project/go-cbor-util"
 	filmarket "github.com/filecoin-project/go-state-types/builtin/v9/market"
 	"github.com/georgysavva/scany/pgxscan"
-	"github.com/urfave/cli/v2"
+	"github.com/ribasushi/go-toolbox/cmn"
+	"github.com/ribasushi/go-toolbox/ufcli"
+	"github.com/ribasushi/spade/internal/app"
 )
 
 type signTotals struct {
@@ -17,13 +18,12 @@ type signTotals struct {
 	failed  *int32
 }
 
-var signPending = &cli.Command{
+var signPending = &ufcli.Command{
 	Usage: "Sign pending deal proposals",
 	Name:  "sign-pending",
-	Flags: []cli.Flag{},
-	Action: func(cctx *cli.Context) error {
-
-		ctx := cctx.Context
+	Flags: []ufcli.Flag{},
+	Action: func(cctx *ufcli.Context) error {
+		ctx, log, db, gctx := app.UnpackCtx(cctx.Context)
 
 		totals := signTotals{
 			signed:  new(int32),
@@ -47,13 +47,13 @@ var signPending = &cli.Command{
 		pending := make([]signaturePending, 0, 128)
 		if err := pgxscan.Select(
 			ctx,
-			cmn.Db,
+			db,
 			&pending,
 			`
 			SELECT
 					pr.proposal_uuid,
 					pr.proposal_meta->'filmarket_proposal' AS proposal_payload
-				FROM egd.proposals pr
+				FROM spd.proposals pr
 			WHERE
 				signature_obtained IS NULL
 					AND
@@ -71,7 +71,7 @@ var signPending = &cli.Command{
 				return cmn.WrErr(err)
 			}
 
-			sig, err := cmn.LotusAPIHeavy.WalletSign(ctx, p.ProposalPayload.Client, raw)
+			sig, err := gctx.LotusAPI[app.FilHeavy].WalletSign(ctx, p.ProposalPayload.Client, raw)
 			if err != nil {
 				return cmn.WrErr(err)
 			}
@@ -84,10 +84,10 @@ var signPending = &cli.Command{
 				return cmn.WrErr(err)
 			}
 
-			if _, err := cmn.Db.Exec(
+			if _, err := db.Exec(
 				ctx,
 				`
-				UPDATE egd.proposals SET
+				UPDATE spd.proposals SET
 					signature_obtained = NOW(),
 					proposal_meta = JSONB_SET(
 						JSONB_SET(
