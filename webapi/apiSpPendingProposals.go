@@ -114,6 +114,7 @@ func apiSpListPendingProposals(c echo.Context) error {
 			toActivate++
 
 		case p.ProposalFailstamp > 0:
+			outstandingBytes -= (1 << p.PieceLog2Size) // take it back
 			t := dealTuple{pieceID: p.PieceID, tenantID: p.TenantID}
 			f := apitypes.ProposalFailure{
 				ErrorTimeStamp: time.Unix(0, p.ProposalFailstamp),

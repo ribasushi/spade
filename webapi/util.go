@@ -158,6 +158,7 @@ func retAuthFail(c echo.Context, f string, args ...interface{}) error {
 	)
 }
 
+// using ristretto here because of SetWithTTL() below
 var providerEligibleCache, _ = ristretto.NewCache(&ristretto.Config{
 	NumCounters: 1e7, BufferItems: 64,
 	MaxCost: 1024,
