@@ -9,7 +9,6 @@ import (
 
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/google/uuid"
-	"github.com/ipfs/go-cid"
 	"github.com/multiformats/go-multiaddr"
 	"github.com/ribasushi/go-toolbox-interplanetary/lp2p"
 	"github.com/ribasushi/go-toolbox/cmn"
@@ -22,27 +21,22 @@ import (
 	filaddr "github.com/filecoin-project/go-address"
 	filmarket "github.com/filecoin-project/go-state-types/builtin/v9/market"
 	filcrypto "github.com/filecoin-project/go-state-types/crypto"
-
-	lotusmarket "github.com/filecoin-project/go-fil-markets/storagemarket"
-	lotusapi "github.com/filecoin-project/lotus/api"
 )
 
 type proposalPending struct {
-	ProposalUUID         uuid.UUID
-	ProposalLabel        string
-	ProposalPayload      filmarket.DealProposal
-	ProposalSignature    filcrypto.Signature
-	ProposalCid          string
-	PeerID               *lp2p.PeerID
-	Multiaddrs           []string
-	ProviderSupportsV120 bool
+	ProposalUUID      uuid.UUID
+	ProposalLabel     string
+	ProposalPayload   filmarket.DealProposal
+	ProposalSignature filcrypto.Signature
+	ProposalCid       string
+	PeerID            *lp2p.PeerID
+	Multiaddrs        []string
 }
 type proposalsPerSP map[filaddr.Address][]proposalPending
 
 type runTotals struct {
 	proposals       int
 	uniqueProviders int
-	deliveredLegacy *int32
 	delivered120    *int32
 	timedout        *int32
 	failed          *int32
@@ -80,17 +74,15 @@ var proposePending = &ufcli.Command{
 		ctx, log, db, _ := app.UnpackCtx(cctx.Context)
 
 		tot := runTotals{
-			deliveredLegacy: new(int32),
-			delivered120:    new(int32),
-			timedout:        new(int32),
-			failed:          new(int32),
+			delivered120: new(int32),
+			timedout:     new(int32),
+			failed:       new(int32),
 		}
 		defer func() {
 			log.Infow("summary",
 				"uniqueProviders", tot.uniqueProviders,
 				"proposals", tot.proposals,
 				"successfulV120", atomic.LoadInt32(tot.delivered120),
-				"successfulLegacy", atomic.LoadInt32(tot.deliveredLegacy),
 				"failed", atomic.LoadInt32(tot.failed),
 				"timedout", atomic.LoadInt32(tot.timedout),
 			)
@@ -108,7 +100,6 @@ var proposePending = &ufcli.Command{
 					pr.proposal_meta->'signature' AS proposal_signature,
 					pr.proposal_meta->>'signed_proposal_cid' AS proposal_cid,
 					p.proposal_label,
-					( pi.info->'peer_info'->'libp2p_protocols'->$1 ) IS NOT NULL AS provider_supports_v120,
 					pi.info->'peerid' AS peer_id,
 					pi.info->'multiaddrs' AS multiaddrs
 				FROM spd.proposals pr
@@ -122,7 +113,6 @@ var proposePending = &ufcli.Command{
 				proposal_failstamp = 0
 			ORDER BY entry_created
 			`,
-			filtypes.StorageProposalV120,
 		); err != nil {
 			return cmn.WrErr(err)
 		}
@@ -162,16 +152,15 @@ var proposePending = &ufcli.Command{
 }
 
 func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) error {
-	ctx, log, db, gctx := app.UnpackCtx(ctx)
-
-	sp := props[0].ProposalPayload.Provider
-	propType := "legacy"
-	if props[0].ProviderSupportsV120 {
-		propType = "v120"
+	if len(props) == 0 {
+		return nil
 	}
 
+	ctx, log, db, _ := app.UnpackCtx(ctx)
+	sp := props[0].ProposalPayload.Provider
+
 	dealCount := len(props)
-	jobDesc := fmt.Sprintf("proposing %d deals to %s(%s)", dealCount, sp, propType)
+	jobDesc := fmt.Sprintf("proposing %d deals to %s", dealCount, sp)
 	var delivered, failed, timedout int
 	log.Info("START " + jobDesc)
 	t0 := time.Now()
@@ -191,6 +180,8 @@ func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) er
 	ctx, cancel := context.WithDeadline(ctx, t0.Add(time.Duration(perSpTimeout)*time.Second))
 	defer cancel()
 
+	// do everything in the same loop, even the lp2p dial, so that we can
+	// reuse the db-update code either way
 	var nodeHost lp2p.Host
 	var dialTookMsecs *int64
 	var localPeerid *string
@@ -205,163 +196,129 @@ func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) er
 			}
 		}
 
-		var propCidStr *string
-		var callErr error
+		var proposalLoopErr error
+
+		// connect if needed
+		if nodeHost == nil {
+
+			var err error
+			nodeHost, _, err = lp2p.NewPlainNodeTCP(time.Duration(proposalTimeout) * time.Second)
+			if err != nil {
+				return cmn.WrErr(err)
+			}
+
+			defer func() {
+				if err := nodeHost.Close(); err != nil {
+					log.Warnf("unexpected error shutting down node %s: %s", nodeHost.ID().String(), err)
+				}
+			}()
+
+			lpid := nodeHost.ID().String()
+			localPeerid = &lpid
+
+			pTag := "proposing"
+			nodeHost.ConnManager().Protect(*p.PeerID, pTag)
+			defer nodeHost.ConnManager().Unprotect(*p.PeerID, pTag)
+
+			addrs := make([]multiaddr.Multiaddr, len(p.Multiaddrs))
+			for i := range p.Multiaddrs {
+				addrs[i] = multiaddr.StringCast(p.Multiaddrs[i])
+			}
+			t1 := time.Now()
+			proposalLoopErr = nodeHost.Connect(ctx, lp2p.AddrInfo{
+				ID:    *p.PeerID,
+				Addrs: addrs,
+			})
+			dms := time.Since(t1).Milliseconds()
+			dialTookMsecs = &dms
+		}
+
 		var proposingTookMsecs *int64
-
-		if !p.ProviderSupportsV120 {
-
-			var propCid *cid.Cid
+		if proposalLoopErr == nil {
+			var resp filtypes.StorageProposalV120Response
 			tCtx, tCtxCancel := context.WithTimeout(ctx, time.Duration(proposalTimeout)*time.Second)
 			t1 := time.Now()
-			propCid, callErr = gctx.LotusAPI[app.FilHeavy].ClientStatelessDeal(
+			proposalLoopErr = lp2p.DoCborRPC(
 				tCtx,
-				&lotusapi.StartDealParams{
-					DealStartEpoch:     p.ProposalPayload.StartEpoch,
-					MinBlocksDuration:  uint64(p.ProposalPayload.EndEpoch - p.ProposalPayload.StartEpoch),
-					FastRetrieval:      true,
-					VerifiedDeal:       p.ProposalPayload.VerifiedDeal,
-					Wallet:             p.ProposalPayload.Client,
-					Miner:              p.ProposalPayload.Provider,
-					EpochPrice:         p.ProposalPayload.StoragePricePerEpoch,
-					ProviderCollateral: p.ProposalPayload.ProviderCollateral,
-					Data: &lotusmarket.DataRef{
-						TransferType: lotusmarket.TTManual,
-						PieceCid:     &p.ProposalPayload.PieceCID,
-						PieceSize:    p.ProposalPayload.PieceSize.Unpadded(),
-						Root:         cid.MustParse(p.ProposalLabel),
+				nodeHost,
+				*p.PeerID,
+				filtypes.StorageProposalV120,
+				&filtypes.StorageProposalV12xParams{
+					IsOffline:          true, // not negotiable: out-of-band-transfers forever
+					DealUUID:           p.ProposalUUID,
+					RemoveUnsealedCopy: false, // potentially allow tenants to request different defaults
+					SkipIPNIAnnounce:   false, // in the murky future
+					ClientDealProposal: filmarket.ClientDealProposal{
+						Proposal:        p.ProposalPayload,
+						ClientSignature: p.ProposalSignature,
 					},
+					// there is no "DataRoot" - always set to the PieceCID itself as per
+					// https://filecoinproject.slack.com/archives/C03AQ3QAUG1/p1662622159003079?thread_ts=1662552800.028649&cid=C03AQ3QAUG1
+					DealDataRoot: p.ProposalPayload.PieceCID,
 				},
+				&resp,
 			)
 			pms := time.Since(t1).Milliseconds()
 			proposingTookMsecs = &pms
 			tCtxCancel()
-			if propCid != nil {
-				s := propCid.String()
-				propCidStr = &s
-			}
-		} else {
-
-			// connect on first iteration
-			if nodeHost == nil {
-
-				var err error
-				nodeHost, _, err = lp2p.NewPlainNodeTCP(time.Duration(proposalTimeout) * time.Second)
-				if err != nil {
-					return cmn.WrErr(err)
-				}
-
-				defer func() {
-					if err := nodeHost.Close(); err != nil {
-						log.Warnf("unexpected error shutting down node %s: %s", nodeHost.ID().String(), err)
-					}
-				}()
-
-				lpid := nodeHost.ID().String()
-				localPeerid = &lpid
-
-				pTag := "proposing"
-				nodeHost.ConnManager().Protect(*p.PeerID, pTag)
-				defer nodeHost.ConnManager().Unprotect(*p.PeerID, pTag)
-
-				addrs := make([]multiaddr.Multiaddr, len(p.Multiaddrs))
-				for i := range p.Multiaddrs {
-					addrs[i] = multiaddr.StringCast(p.Multiaddrs[i])
-				}
-				t1 := time.Now()
-				callErr = nodeHost.Connect(ctx, lp2p.AddrInfo{
-					ID:    *p.PeerID,
-					Addrs: addrs,
-				})
-				dms := time.Since(t1).Milliseconds()
-				dialTookMsecs = &dms
-			}
-
-			if callErr == nil {
-				var resp filtypes.StorageProposalV120Response
-				tCtx, tCtxCancel := context.WithTimeout(ctx, time.Duration(proposalTimeout)*time.Second)
-				t1 := time.Now()
-				callErr = lp2p.DoCborRPC(
-					tCtx,
-					nodeHost,
-					*p.PeerID,
-					filtypes.StorageProposalV120,
-					&filtypes.StorageProposalV120Params{
-						DealUUID:     p.ProposalUUID,
-						IsOffline:    true,
-						DealDataRoot: p.ProposalPayload.PieceCID,
-						ClientDealProposal: filmarket.ClientDealProposal{
-							Proposal:        p.ProposalPayload,
-							ClientSignature: p.ProposalSignature,
-						},
-					},
-					&resp,
-				)
-				pms := time.Since(t1).Milliseconds()
-				proposingTookMsecs = &pms
-				tCtxCancel()
-				if callErr == nil && !resp.Accepted {
-					callErr = xerrors.New(resp.Message)
-				}
+			if proposalLoopErr == nil && !resp.Accepted {
+				proposalLoopErr = xerrors.New(resp.Message)
 			}
 		}
 
+		// set a few extra common parts
+		if _, err := db.Exec(
+			context.Background(), // deliberate: even if outer context is cancelled we still need to write to DB
+			`
+			UPDATE spd.proposals SET
+				proposal_meta = JSONB_STRIP_NULLS(
+					JSONB_SET(
+						JSONB_SET(
+							JSONB_SET(
+								proposal_meta,
+								'{ dialing_peerid }',
+								COALESCE( TO_JSONB( $2::TEXT ), 'null'::JSONB )
+							),
+							'{ dial_took_msecs }',
+							COALESCE( TO_JSONB( $3::BIGINT ), 'null'::JSONB )
+						),
+						'{ proposal_took_msecs }',
+						COALESCE( TO_JSONB( $4::BIGINT ), 'null'::JSONB )
+					)
+				)
+			WHERE
+				proposal_uuid = $1
+			`,
+			p.ProposalUUID,
+			localPeerid,
+			dialTookMsecs,
+			proposingTookMsecs,
+		); err != nil {
+			return cmn.WrErr(err)
+		}
+
 		// we did it!
-		if callErr == nil {
+		if proposalLoopErr == nil {
 
 			delivered++
-			if p.ProviderSupportsV120 {
-				atomic.AddInt32(tot.delivered120, 1)
-			} else {
-				atomic.AddInt32(tot.deliveredLegacy, 1)
-			}
-
-			if propCidStr != nil && p.ProposalCid != *propCidStr {
-				// this is a soft-warning, not catastrophic (see below)
-				log.Warnf("proposal CID mismatch on success: expected %s got %s", p.ProposalCid, *propCidStr)
-			}
+			atomic.AddInt32(tot.delivered120, 1)
 
 			if _, err := db.Exec(
 				context.Background(), // deliberate: even if outer context is cancelled we still need to write to DB
 				`
 				UPDATE spd.proposals SET
-					proposal_delivered = NOW(),
-					proposal_meta = JSONB_STRIP_NULLS(
-						JSONB_SET(
-							JSONB_SET(
-								JSONB_SET(
-									-- FIXME - remove when v120 is default
-									-- we need to re-write the signed_proposal_cid, as Lotus is known to mangle things for us at times
-									JSONB_SET(
-										proposal_meta,
-										'{ signed_proposal_cid }',
-										TO_JSONB( COALESCE( $2::TEXT, proposal_meta->>'signed_proposal_cid' ) )
-									),
-									'{ dialing_peerid }',
-									COALESCE( TO_JSONB( $3::TEXT ), 'null'::JSONB )
-								),
-								'{ dial_took_msecs }',
-								COALESCE( TO_JSONB( $4::BIGINT ), 'null'::JSONB )
-							),
-							'{ proposal_took_msecs }',
-							COALESCE( TO_JSONB( $5::BIGINT ), 'null'::JSONB )
-						)
-					)
+					proposal_delivered = NOW()
 				WHERE
 					proposal_uuid = $1
 				`,
 				p.ProposalUUID,
-				propCidStr,
-				localPeerid,
-				dialTookMsecs,
-				proposingTookMsecs,
 			); err != nil {
 				return cmn.WrErr(err)
 			}
 		} else {
-			log.Error(callErr)
+			log.Error(proposalLoopErr)
 
-			didTimeout := errors.Is(callErr, context.DeadlineExceeded)
+			didTimeout := errors.Is(proposalLoopErr, context.DeadlineExceeded)
 			if didTimeout {
 				timedout++
 				atomic.AddInt32(tot.timedout, 1)
@@ -377,38 +334,22 @@ func proposeToSp(ctx context.Context, props []proposalPending, tot runTotals) er
 					proposal_failstamp = spd.big_now(),
 					proposal_meta = JSONB_STRIP_NULLS(
 						JSONB_SET(
-							JSONB_SET(
-								JSONB_SET(
-									JSONB_SET(
-										proposal_meta,
-										'{ failure }',
-										TO_JSONB( $2::TEXT )
-									),
-									'{ dialing_peerid }',
-									COALESCE( TO_JSONB( $3::TEXT ), 'null'::JSONB )
-								),
-								'{ dial_took_msecs }',
-								COALESCE( TO_JSONB( $4::BIGINT ), 'null'::JSONB )
-							),
-							'{ proposal_took_msecs }',
-							COALESCE( TO_JSONB( $5::BIGINT ), 'null'::JSONB )
+							proposal_meta,
+							'{ failure }',
+							TO_JSONB( $2::TEXT )
 						)
 					)
 				WHERE
 					proposal_uuid = $1
 				`,
 				p.ProposalUUID,
-				callErr.Error(),
-				localPeerid,
-				dialTookMsecs,
-				proposingTookMsecs,
+				proposalLoopErr.Error(),
 			); err != nil {
 				return cmn.WrErr(err)
 			}
 
 			// in case of a timeout or connection failure: bail after failing just one proposal, retry next time
-			if (p.ProviderSupportsV120 && nodeHost == nil) ||
-				didTimeout {
+			if nodeHost == nil || didTimeout {
 				return nil
 			}
 		}

@@ -18,7 +18,7 @@ var _ = cid.Undef
 var _ = math.E
 var _ = sort.Sort
 
-func (t *StorageProposalV120Params) MarshalCBOR(w io.Writer) error {
+func (t *StorageProposalV12xParams) MarshalCBOR(w io.Writer) error {
 	if t == nil {
 		_, err := w.Write(cbg.CborNull)
 		return err
@@ -26,7 +26,7 @@ func (t *StorageProposalV120Params) MarshalCBOR(w io.Writer) error {
 
 	cw := cbg.NewCborWriter(w)
 
-	if _, err := cw.Write([]byte{164}); err != nil {
+	if _, err := cw.Write([]byte{166}); err != nil {
 		return err
 	}
 
@@ -102,11 +102,42 @@ func (t *StorageProposalV120Params) MarshalCBOR(w io.Writer) error {
 		return xerrors.Errorf("failed to write cid field t.DealDataRoot: %w", err)
 	}
 
+	// t.RemoveUnsealedCopy (bool) (bool)
+	if len("RemoveUnsealedCopy") > cbg.MaxLength {
+		return xerrors.Errorf("Value in field \"RemoveUnsealedCopy\" was too long")
+	}
+
+	if err := cw.WriteMajorTypeHeader(cbg.MajTextString, uint64(len("RemoveUnsealedCopy"))); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, string("RemoveUnsealedCopy")); err != nil {
+		return err
+	}
+
+	if err := cbg.WriteBool(w, t.RemoveUnsealedCopy); err != nil {
+		return err
+	}
+
+	// t.SkipIPNIAnnounce (bool) (bool)
+	if len("SkipIPNIAnnounce") > cbg.MaxLength {
+		return xerrors.Errorf("Value in field \"SkipIPNIAnnounce\" was too long")
+	}
+
+	if err := cw.WriteMajorTypeHeader(cbg.MajTextString, uint64(len("SkipIPNIAnnounce"))); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, string("SkipIPNIAnnounce")); err != nil {
+		return err
+	}
+
+	if err := cbg.WriteBool(w, t.SkipIPNIAnnounce); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (t *StorageProposalV120Params) UnmarshalCBOR(r io.Reader) (err error) {
-	*t = StorageProposalV120Params{}
+func (t *StorageProposalV12xParams) UnmarshalCBOR(r io.Reader) (err error) {
+	*t = StorageProposalV12xParams{}
 
 	cr := cbg.NewCborReader(r)
 
@@ -125,7 +156,7 @@ func (t *StorageProposalV120Params) UnmarshalCBOR(r io.Reader) (err error) {
 	}
 
 	if extra > cbg.MaxLength {
-		return fmt.Errorf("StorageProposalV120Params: map struct too large (%d)", extra)
+		return fmt.Errorf("StorageProposalV12xParams: map struct too large (%d)", extra)
 	}
 
 	var name string
@@ -207,6 +238,42 @@ func (t *StorageProposalV120Params) UnmarshalCBOR(r io.Reader) (err error) {
 
 				t.DealDataRoot = c
 
+			}
+			// t.RemoveUnsealedCopy (bool) (bool)
+		case "RemoveUnsealedCopy":
+
+			maj, extra, err = cr.ReadHeader()
+			if err != nil {
+				return err
+			}
+			if maj != cbg.MajOther {
+				return fmt.Errorf("booleans must be major type 7")
+			}
+			switch extra {
+			case 20:
+				t.RemoveUnsealedCopy = false
+			case 21:
+				t.RemoveUnsealedCopy = true
+			default:
+				return fmt.Errorf("booleans are either major type 7, value 20 or 21 (got %d)", extra)
+			}
+			// t.SkipIPNIAnnounce (bool) (bool)
+		case "SkipIPNIAnnounce":
+
+			maj, extra, err = cr.ReadHeader()
+			if err != nil {
+				return err
+			}
+			if maj != cbg.MajOther {
+				return fmt.Errorf("booleans must be major type 7")
+			}
+			switch extra {
+			case 20:
+				t.SkipIPNIAnnounce = false
+			case 21:
+				t.SkipIPNIAnnounce = true
+			default:
+				return fmt.Errorf("booleans are either major type 7, value 20 or 21 (got %d)", extra)
 			}
 
 		default:

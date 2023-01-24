@@ -6,36 +6,39 @@ package filtypes
 import (
 	"io"
 
-	lotusmarket "github.com/filecoin-project/go-fil-markets/retrievalmarket"
 	filmarket "github.com/filecoin-project/go-state-types/builtin/v9/market"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/google/uuid"
 	"github.com/ipfs/go-cid"
 )
 
-//go:generate go run github.com/hannahhoward/cbor-gen-for --map-encoding StorageProposalV120Params StorageProposalV120Response
+//go:generate go run github.com/hannahhoward/cbor-gen-for --map-encoding StorageProposalV12xParams StorageProposalV120Response
 
 //nolint:revive
 const (
-	RetrievalQueryAsk   = lotusmarket.QueryProtocolID       // use the 1.0 protocol even if we do not care about PCIDs
+	RetrievalQueryAsk   = "/fil/retrieval/qry/1.0.0"        // use the 1.0 protocol even if we do not care about PCIDs
 	RetrievalTransports = "/fil/retrieval/transports/1.0.0" // this is boost-specific, do not bring extra dependency
 	StorageProposalV120 = "/fil/storage/mk/1.2.0"           // same: boost-specific
 )
 
-// StorageProposalV120Params is a copy of https://github.com/filecoin-project/boost/blob/v1.5.0/storagemarket/types/types.go#L80-L84
-// except for the zero-part at end
-type StorageProposalV120Params struct {
+// StorageProposalV12xParams is an amalgam of
+// https://github.com/filecoin-project/boost/blob/v1.5.0/storagemarket/types/types.go#L80-L84
+// and
+// https://github.com/filecoin-project/boost/blob/v1.5.1-rc3/storagemarket/types/types.go#L80-L88
+type StorageProposalV12xParams struct {
 	DealUUID           uuid.UUID
 	IsOffline          bool
 	ClientDealProposal filmarket.ClientDealProposal
 	DealDataRoot       cid.Cid
+	RemoveUnsealedCopy bool
+	SkipIPNIAnnounce   bool
 }
 
 // StorageProposalV120Response is a copy of https://github.com/filecoin-project/boost/blob/v1.5.0/storagemarket/types/types.go#L142-L147
 type StorageProposalV120Response struct {
 	Accepted bool
-	// Message is the reason the deal proposal was rejected. It is empty if
-	// the deal was accepted.
+	// Message is the reason the deal proposal was rejected.
+	// It is empty if the deal was accepted 🤦
 	Message string
 }
 

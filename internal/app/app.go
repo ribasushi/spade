@@ -124,8 +124,10 @@ func GlobalInit(cctx *ufcli.Context, uf *ufcli.UFcli) (func() error, error) { //
 	if err != nil {
 		return nil, cmn.WrErr(err)
 	}
+	// dbConnCfg.MaxConns = 42
 	dbConnCfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
 		// _, err := c.Exec(ctx, `SET search_path = spade`)
+		// _, err := c.Exec(ctx, fmt.Sprintf(`SET STATEMENT_TIMEOUT = %d`, (2*time.Hour).Milliseconds()))
 		// return WrErr(err)
 		return nil
 	}

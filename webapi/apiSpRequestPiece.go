@@ -24,6 +24,7 @@ import (
 	"github.com/ribasushi/go-toolbox-interplanetary/fil"
 	"github.com/ribasushi/go-toolbox/cmn"
 	"github.com/ribasushi/spade/internal/app"
+	"github.com/ribasushi/spade/internal/filtypes"
 )
 
 var v1UrlEnc = multibase.MustNewEncoder(multibase.Base64url)
@@ -76,6 +77,19 @@ func apiSpRequestPiece(c echo.Context) error {
 				"Please invoke the status endpoint for further details:",
 				curlAuthedForSP(c, ctxMeta.authedActorID, "/sp/status"),
 			}, "\n"),
+		)
+	}
+
+	// only boost
+	if _, canV120 := ctxMeta.spInfo.PeerInfo.Protos[filtypes.StorageProposalV120]; !canV120 {
+		return retFail(
+			c,
+			apitypes.ErrStorageProviderUnsupported,
+			strings.Join([]string{
+				"It appears your provider does not support %s.",
+				"You must upgrade to Boost v1.5.1 or equivalent to use ♠️",
+			}, "\n"),
+			filtypes.StorageProposalV120,
 		)
 	}
 
