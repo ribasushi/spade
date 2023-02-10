@@ -112,7 +112,7 @@ require (
 	github.com/ipfs/go-merkledag v0.8.1 // indirect
 	github.com/ipfs/go-metrics-interface v0.0.1 // indirect
 	github.com/ipfs/go-path v0.3.0 // indirect
-	github.com/ipfs/go-unixfs v0.4.1 // indirect
+	github.com/ipfs/go-unixfs v0.4.3 // indirect
 	github.com/ipfs/go-verifcid v0.0.2 // indirect
 	github.com/ipfs/interface-go-ipfs-core v0.7.0 // indirect
 	github.com/ipld/go-car v0.5.0 // indirect
