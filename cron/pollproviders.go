@@ -9,7 +9,6 @@ import (
 	"time"
 
 	filaddr "github.com/filecoin-project/go-address"
-	lotustypes "github.com/filecoin-project/lotus/chain/types"
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/multiformats/go-multiaddr"
 	infomempeerstore "github.com/ribasushi/go-libp2p-infomempeerstore"
@@ -198,7 +197,7 @@ func getSPInfo(ctx context.Context, sp filaddr.Address, timeOut time.Duration) (
 	ctx, ctxCloser := context.WithTimeout(ctx, timeOut)
 	defer ctxCloser()
 
-	mi, err := gctx.LotusAPI[app.FilLite].StateMinerInfo(ctx, sp, lotustypes.EmptyTSK)
+	mi, err := gctx.LotusAPI[app.FilLite].StateMinerInfo(ctx, sp, fil.LotusTSK{})
 	if err != nil {
 		return spInfo{}, cmn.WrErr(err)
 	}

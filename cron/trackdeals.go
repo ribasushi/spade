@@ -12,7 +12,6 @@ import (
 	filbig "github.com/filecoin-project/go-state-types/big"
 	filbuiltin "github.com/filecoin-project/go-state-types/builtin"
 	lotusapi "github.com/filecoin-project/lotus/api"
-	lotustypes "github.com/filecoin-project/lotus/chain/types"
 	"github.com/georgysavva/scany/pgxscan"
 	"github.com/ipfs/go-cid"
 	"github.com/jackc/pgx/v4"
@@ -450,8 +449,8 @@ var trackDeals = &ufcli.Command{
 			}
 
 			msJ, _ := json.Marshal(struct {
-				Epoch  filabi.ChainEpoch    `json:"epoch"`
-				Tipset lotustypes.TipSetKey `json:"tipset"`
+				Epoch  filabi.ChainEpoch `json:"epoch"`
+				Tipset fil.LotusTSK      `json:"tipset"`
 			}{
 				Epoch:  curTipset.Height(),
 				Tipset: curTipset.Key(),

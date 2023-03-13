@@ -6,8 +6,6 @@ import (
 
 	filabi "github.com/filecoin-project/go-state-types/abi"
 	filbuiltin "github.com/filecoin-project/go-state-types/builtin"
-	lotusapi "github.com/filecoin-project/lotus/api"
-	lotustypes "github.com/filecoin-project/lotus/chain/types"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/ribasushi/go-toolbox-interplanetary/fil"
@@ -37,8 +35,8 @@ type (
 	dbtype        int
 	DbConns       map[dbtype]*pgxpool.Pool //nolint:revive
 	filapitype    int
-	FilAPIs       map[filapitype]*lotusapi.FullNodeStruct //nolint:revive
-	GlobalContext struct {                                //nolint:revive
+	FilAPIs       map[filapitype]*fil.LotusAPIClient //nolint:revive
+	GlobalContext struct {                           //nolint:revive
 		Db       DbConns
 		LotusAPI FilAPIs
 		Logger   ufcli.Logger
@@ -64,7 +62,7 @@ func UnpackCtx(ctx context.Context) ( //nolint:revive
 
 var lotusLookbackEpochs uint
 
-func DefaultLookbackTipset(ctx context.Context) (*lotustypes.TipSet, error) { //nolint:revive
+func DefaultLookbackTipset(ctx context.Context) (*fil.LotusTS, error) { //nolint:revive
 	return fil.GetTipset(ctx, GetGlobalCtx(ctx).LotusAPI[FilLite], filabi.ChainEpoch(lotusLookbackEpochs))
 }
 

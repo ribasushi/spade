@@ -70,22 +70,6 @@ func (t *StorageProposalV12xParams) MarshalCBOR(w io.Writer) error {
 		return err
 	}
 
-	// t.ClientDealProposal (market.ClientDealProposal) (struct)
-	if len("ClientDealProposal") > cbg.MaxLength {
-		return xerrors.Errorf("Value in field \"ClientDealProposal\" was too long")
-	}
-
-	if err := cw.WriteMajorTypeHeader(cbg.MajTextString, uint64(len("ClientDealProposal"))); err != nil {
-		return err
-	}
-	if _, err := io.WriteString(w, string("ClientDealProposal")); err != nil {
-		return err
-	}
-
-	if err := t.ClientDealProposal.MarshalCBOR(cw); err != nil {
-		return err
-	}
-
 	// t.DealDataRoot (cid.Cid) (struct)
 	if len("DealDataRoot") > cbg.MaxLength {
 		return xerrors.Errorf("Value in field \"DealDataRoot\" was too long")
@@ -102,22 +86,6 @@ func (t *StorageProposalV12xParams) MarshalCBOR(w io.Writer) error {
 		return xerrors.Errorf("failed to write cid field t.DealDataRoot: %w", err)
 	}
 
-	// t.RemoveUnsealedCopy (bool) (bool)
-	if len("RemoveUnsealedCopy") > cbg.MaxLength {
-		return xerrors.Errorf("Value in field \"RemoveUnsealedCopy\" was too long")
-	}
-
-	if err := cw.WriteMajorTypeHeader(cbg.MajTextString, uint64(len("RemoveUnsealedCopy"))); err != nil {
-		return err
-	}
-	if _, err := io.WriteString(w, string("RemoveUnsealedCopy")); err != nil {
-		return err
-	}
-
-	if err := cbg.WriteBool(w, t.RemoveUnsealedCopy); err != nil {
-		return err
-	}
-
 	// t.SkipIPNIAnnounce (bool) (bool)
 	if len("SkipIPNIAnnounce") > cbg.MaxLength {
 		return xerrors.Errorf("Value in field \"SkipIPNIAnnounce\" was too long")
@@ -131,6 +99,38 @@ func (t *StorageProposalV12xParams) MarshalCBOR(w io.Writer) error {
 	}
 
 	if err := cbg.WriteBool(w, t.SkipIPNIAnnounce); err != nil {
+		return err
+	}
+
+	// t.ClientDealProposal (market.ClientDealProposal) (struct)
+	if len("ClientDealProposal") > cbg.MaxLength {
+		return xerrors.Errorf("Value in field \"ClientDealProposal\" was too long")
+	}
+
+	if err := cw.WriteMajorTypeHeader(cbg.MajTextString, uint64(len("ClientDealProposal"))); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, string("ClientDealProposal")); err != nil {
+		return err
+	}
+
+	if err := t.ClientDealProposal.MarshalCBOR(cw); err != nil {
+		return err
+	}
+
+	// t.RemoveUnsealedCopy (bool) (bool)
+	if len("RemoveUnsealedCopy") > cbg.MaxLength {
+		return xerrors.Errorf("Value in field \"RemoveUnsealedCopy\" was too long")
+	}
+
+	if err := cw.WriteMajorTypeHeader(cbg.MajTextString, uint64(len("RemoveUnsealedCopy"))); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, string("RemoveUnsealedCopy")); err != nil {
+		return err
+	}
+
+	if err := cbg.WriteBool(w, t.RemoveUnsealedCopy); err != nil {
 		return err
 	}
 	return nil
@@ -216,16 +216,6 @@ func (t *StorageProposalV12xParams) UnmarshalCBOR(r io.Reader) (err error) {
 			default:
 				return fmt.Errorf("booleans are either major type 7, value 20 or 21 (got %d)", extra)
 			}
-			// t.ClientDealProposal (market.ClientDealProposal) (struct)
-		case "ClientDealProposal":
-
-			{
-
-				if err := t.ClientDealProposal.UnmarshalCBOR(cr); err != nil {
-					return xerrors.Errorf("unmarshaling t.ClientDealProposal: %w", err)
-				}
-
-			}
 			// t.DealDataRoot (cid.Cid) (struct)
 		case "DealDataRoot":
 
@@ -237,6 +227,34 @@ func (t *StorageProposalV12xParams) UnmarshalCBOR(r io.Reader) (err error) {
 				}
 
 				t.DealDataRoot = c
+
+			}
+			// t.SkipIPNIAnnounce (bool) (bool)
+		case "SkipIPNIAnnounce":
+
+			maj, extra, err = cr.ReadHeader()
+			if err != nil {
+				return err
+			}
+			if maj != cbg.MajOther {
+				return fmt.Errorf("booleans must be major type 7")
+			}
+			switch extra {
+			case 20:
+				t.SkipIPNIAnnounce = false
+			case 21:
+				t.SkipIPNIAnnounce = true
+			default:
+				return fmt.Errorf("booleans are either major type 7, value 20 or 21 (got %d)", extra)
+			}
+			// t.ClientDealProposal (market.ClientDealProposal) (struct)
+		case "ClientDealProposal":
+
+			{
+
+				if err := t.ClientDealProposal.UnmarshalCBOR(cr); err != nil {
+					return xerrors.Errorf("unmarshaling t.ClientDealProposal: %w", err)
+				}
 
 			}
 			// t.RemoveUnsealedCopy (bool) (bool)
@@ -254,24 +272,6 @@ func (t *StorageProposalV12xParams) UnmarshalCBOR(r io.Reader) (err error) {
 				t.RemoveUnsealedCopy = false
 			case 21:
 				t.RemoveUnsealedCopy = true
-			default:
-				return fmt.Errorf("booleans are either major type 7, value 20 or 21 (got %d)", extra)
-			}
-			// t.SkipIPNIAnnounce (bool) (bool)
-		case "SkipIPNIAnnounce":
-
-			maj, extra, err = cr.ReadHeader()
-			if err != nil {
-				return err
-			}
-			if maj != cbg.MajOther {
-				return fmt.Errorf("booleans must be major type 7")
-			}
-			switch extra {
-			case 20:
-				t.SkipIPNIAnnounce = false
-			case 21:
-				t.SkipIPNIAnnounce = true
 			default:
 				return fmt.Errorf("booleans are either major type 7, value 20 or 21 (got %d)", extra)
 			}
@@ -296,22 +296,6 @@ func (t *StorageProposalV120Response) MarshalCBOR(w io.Writer) error {
 		return err
 	}
 
-	// t.Accepted (bool) (bool)
-	if len("Accepted") > cbg.MaxLength {
-		return xerrors.Errorf("Value in field \"Accepted\" was too long")
-	}
-
-	if err := cw.WriteMajorTypeHeader(cbg.MajTextString, uint64(len("Accepted"))); err != nil {
-		return err
-	}
-	if _, err := io.WriteString(w, string("Accepted")); err != nil {
-		return err
-	}
-
-	if err := cbg.WriteBool(w, t.Accepted); err != nil {
-		return err
-	}
-
 	// t.Message (string) (string)
 	if len("Message") > cbg.MaxLength {
 		return xerrors.Errorf("Value in field \"Message\" was too long")
@@ -332,6 +316,22 @@ func (t *StorageProposalV120Response) MarshalCBOR(w io.Writer) error {
 		return err
 	}
 	if _, err := io.WriteString(w, string(t.Message)); err != nil {
+		return err
+	}
+
+	// t.Accepted (bool) (bool)
+	if len("Accepted") > cbg.MaxLength {
+		return xerrors.Errorf("Value in field \"Accepted\" was too long")
+	}
+
+	if err := cw.WriteMajorTypeHeader(cbg.MajTextString, uint64(len("Accepted"))); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, string("Accepted")); err != nil {
+		return err
+	}
+
+	if err := cbg.WriteBool(w, t.Accepted); err != nil {
 		return err
 	}
 	return nil
@@ -375,7 +375,18 @@ func (t *StorageProposalV120Response) UnmarshalCBOR(r io.Reader) (err error) {
 		}
 
 		switch name {
-		// t.Accepted (bool) (bool)
+		// t.Message (string) (string)
+		case "Message":
+
+			{
+				sval, err := cbg.ReadString(cr)
+				if err != nil {
+					return err
+				}
+
+				t.Message = string(sval)
+			}
+			// t.Accepted (bool) (bool)
 		case "Accepted":
 
 			maj, extra, err = cr.ReadHeader()
@@ -392,17 +403,6 @@ func (t *StorageProposalV120Response) UnmarshalCBOR(r io.Reader) (err error) {
 				t.Accepted = true
 			default:
 				return fmt.Errorf("booleans are either major type 7, value 20 or 21 (got %d)", extra)
-			}
-			// t.Message (string) (string)
-		case "Message":
-
-			{
-				sval, err := cbg.ReadString(cr)
-				if err != nil {
-					return err
-				}
-
-				t.Message = string(sval)
 			}
 
 		default:

@@ -16,7 +16,6 @@ import (
 	filabi "github.com/filecoin-project/go-state-types/abi"
 	filprovider "github.com/filecoin-project/go-state-types/builtin/v9/miner"
 	filcrypto "github.com/filecoin-project/go-state-types/crypto"
-	lotustypes "github.com/filecoin-project/lotus/chain/types"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/ribasushi/go-toolbox-interplanetary/fil"
@@ -63,7 +62,7 @@ var (
 			`\s*$`,
 	)
 	challengeCache, _ = lru.New[rawHdr, verifySigResult](sigGraceEpochs * 128)
-	beaconCache, _    = lru.New[int64, *lotustypes.BeaconEntry](sigGraceEpochs * 4)
+	beaconCache, _    = lru.New[int64, *fil.LotusBeaconEntry](sigGraceEpochs * 4)
 )
 
 func spidAuth(next echo.HandlerFunc) echo.HandlerFunc {
@@ -250,14 +249,14 @@ func verifySig(ctx context.Context, challenge sigChallenge) (verifySigResult, er
 
 	be, didFind := beaconCache.Get(challenge.epoch)
 	if !didFind {
-		be, err = hAPI.StateGetBeaconEntry(ctx, filabi.ChainEpoch(challenge.epoch))
+		be, err = hAPI.BeaconGetEntry(ctx, filabi.ChainEpoch(challenge.epoch))
 		if err != nil {
 			return verifySigResult{}, cmn.WrErr(err)
 		}
 		beaconCache.Add(challenge.epoch, be)
 	}
 
-	miFinTs, err := lAPI.ChainGetTipSetByHeight(ctx, filabi.ChainEpoch(challenge.epoch)-filprovider.ChainFinality, lotustypes.EmptyTSK)
+	miFinTs, err := lAPI.ChainGetTipSetByHeight(ctx, filabi.ChainEpoch(challenge.epoch)-filprovider.ChainFinality, fil.LotusTSK{})
 	if err != nil {
 		return verifySigResult{}, cmn.WrErr(err)
 	}

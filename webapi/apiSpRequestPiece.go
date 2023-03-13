@@ -13,7 +13,6 @@ import (
 	filbig "github.com/filecoin-project/go-state-types/big"
 	filbuiltin "github.com/filecoin-project/go-state-types/builtin"
 	filmarket "github.com/filecoin-project/go-state-types/builtin/v9/market"
-	lotustypes "github.com/filecoin-project/lotus/chain/types"
 	"github.com/georgysavva/scany/pgxscan"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/ipfs/go-cid"
@@ -384,7 +383,7 @@ func providerCollateralEstimateGiB(ctx context.Context, sourceEpoch filabi.Chain
 
 	lapi := app.GetGlobalCtx(ctx).LotusAPI[app.FilHeavy]
 
-	ts, err := lapi.ChainGetTipSetByHeight(ctx, sourceEpoch, lotustypes.EmptyTSK)
+	ts, err := lapi.ChainGetTipSetByHeight(ctx, sourceEpoch, fil.LotusTSK{})
 	if err != nil {
 		return filbig.Zero(), cmn.WrErr(err)
 	}
